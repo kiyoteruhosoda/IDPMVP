@@ -6,4 +6,5 @@ pub mod clock;
 pub mod crypto;
 pub mod db;
 pub mod jwt;
+pub mod password;
 pub mod repositories;

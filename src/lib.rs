@@ -37,14 +37,15 @@ pub async fn run() -> anyhow::Result<()> {
         .await
         .context("database schema version check failed")?;
 
+    let clock: Arc<dyn domain::clock::Clock> = Arc::new(infrastructure::clock::SystemClock);
+
     // 署名鍵ブートストラップ: ACTIVE 鍵が無ければ生成して永続化する。
     let signing_keys = Arc::new(
         infrastructure::repositories::signing_key::SqlxSigningKeyRepository::new(pool.clone()),
     );
-    let clock = Arc::new(infrastructure::clock::SystemClock);
     let key_service = application::key_service::KeyService::new(
         signing_keys,
-        clock,
+        clock.clone(),
         *config.key_encryption_key(),
     );
     key_service
@@ -52,7 +53,22 @@ pub async fn run() -> anyhow::Result<()> {
         .await
         .context("failed to ensure an active signing key")?;
 
-    let app = presentation::router::build(pool);
+    // ユースケースの組み立てと共有状態。
+    let users = Arc::new(infrastructure::repositories::user::SqlxUserRepository::new(
+        pool.clone(),
+    ));
+    let password_hasher = Arc::new(infrastructure::password::Argon2PasswordHasher::new());
+    let register = Arc::new(application::register::RegisterService::new(
+        users,
+        password_hasher,
+        clock.clone(),
+    ));
+
+    let state = presentation::state::AppState {
+        pool: pool.clone(),
+        register,
+    };
+    let app = presentation::router::build(state);
 
     let addr: SocketAddr = config
         .bind_addr()

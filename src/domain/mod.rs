@@ -9,6 +9,7 @@ pub mod authorization_code;
 pub mod client;
 pub mod clock;
 pub mod error;
+pub mod password;
 pub mod repositories;
 pub mod signing_key;
 pub mod sso_session;
