@@ -2,6 +2,7 @@
 
 use crate::config::Config;
 use sqlx::mysql::{MySqlPool, MySqlPoolOptions};
+use sqlx::Executor;
 
 /// アプリ全体で共有する DB プールの型エイリアス。
 pub type Db = MySqlPool;
@@ -12,6 +13,14 @@ static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 pub async fn connect(config: &Config) -> Result<Db, sqlx::Error> {
     MySqlPoolOptions::new()
         .max_connections(config.db_max_connections())
+        // 全接続のセッションタイムゾーンを UTC に固定する。これにより CURRENT_TIMESTAMP(6) や
+        // DATETIME の読み書きが常に UTC で一貫する（CLAUDE.md「時刻は常に UTC」）。
+        .after_connect(|conn, _meta| {
+            Box::pin(async move {
+                conn.execute("SET time_zone = '+00:00'").await?;
+                Ok(())
+            })
+        })
         .connect(config.database_url())
         .await
 }

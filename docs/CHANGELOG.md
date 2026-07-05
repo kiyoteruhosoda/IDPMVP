@@ -4,6 +4,14 @@
 
 ## 2026-07-05
 
+- **T1: データモデルとマイグレーションを実装**。ベースラインマイグレーション
+  `migrations/0001_baseline`（up/down）で 6 テーブル（users / clients / auth_sessions /
+  sso_sessions / authorization_codes / signing_keys）＋ `audit_log` を作成（MariaDB 向け型読み替え:
+  UUID→`CHAR(36)`、enum→`VARCHAR`+`CHECK`、時刻→UTC `DATETIME(6)`、配列→`JSON`、CITEXT 相当のみ
+  大小無視照合、既定は `utf8mb4_bin`）。ドメイン層にエンティティ・列挙・監査イベント型・リポジトリ
+  トレイト（DIP 境界、`#[async_trait]`）を追加。DB 接続のセッションタイムゾーンを UTC に固定。
+  マイグレーション整合の統合テスト（`tests/schema.rs`）を追加。
+
 - **ドキュメントを実装スタック（Rust + MariaDB）に整合**。CLAUDE.md・db-migration スキルを
   Rust/axum/sqlx 前提へ改訂し、ADR-0005（スタック採用）を追加、ADR-0004 と OIDC_INPUT.md に
   MariaDB 読み替え注記を追加（ADR-0005）。
