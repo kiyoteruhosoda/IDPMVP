@@ -10,5 +10,12 @@ sqlx マイグレーション（MariaDB）を管理する。
 - 規約: DB ネイティブ ENUM 禁止（`VARCHAR` + `CHECK`）、UUID は `CHAR(36)`、時刻は UTC の `DATETIME(6)`。
   詳細は `.claude/skills/db-migration/` と `CLAUDE.md`「DB モデリング」を参照。
 
-初期テーブル（Users / Clients / AuthSessions / SsoSessions / AuthorizationCodes / SigningKeys /
-audit_log）は T1 で追加する。
+- マスタデータ（初期管理ユーザー等）も冪等 upsert のマイグレーションとして書く。単一の出所は
+  当該 seed マイグレーション自身とし、値を他所へ重複させない（`.claude/skills/db-migration/` 参照）。
+
+現行のマイグレーション:
+
+- `0001_baseline`: 全テーブル（users / clients / auth_sessions / sso_sessions /
+  authorization_codes / signing_keys / audit_log）。
+- `0002_seed_initial_admin`: 初期管理ユーザー（`admin@example.com`）の seed。「変更前提のデフォルト値」
+  として冪等 upsert。既定パスワードの変更手順は `docs/OPERATIONS.md`。
