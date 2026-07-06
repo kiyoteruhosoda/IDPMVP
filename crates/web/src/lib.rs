@@ -4,13 +4,16 @@
 //! 描画し、データ取得/操作は api へ HTTP 越しに行う。**DB（sqlx）/ infrastructure には依存しない**
 //! （crate 境界で強制）。
 //!
-//! P3 のステージ 1（本コミット）では、設定・ログ・API クライアント・ヘルスチェックの土台を用意する。
-//! ログイン画面・管理コンソールの移設（application 層直接呼び出しの API クライアント化）と i18n の移設は
-//! 後続ステージで行う。
+//! ログイン画面（`/login`）と i18n は web へ移設済み（P3-2）。管理コンソール（`/admin/console/*`）の
+//! 移設は後続ステージで行う。
 
 pub mod api_client;
 pub mod config;
+pub mod cookies;
+pub mod correlation;
+pub mod dto;
 pub mod handlers;
+pub mod i18n;
 pub mod router;
 pub mod state;
 pub mod telemetry;

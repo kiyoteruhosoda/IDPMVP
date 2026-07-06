@@ -12,7 +12,7 @@ OIDC IdP MVP（**Rust + MariaDB**）の実装計画。設計仕様は `docs/OIDC
 | 1 | K1 | 署名鍵管理: 複数鍵での署名（世代重複）・JWKS 公開・管理画面（一覧/生成/退役）・EC(ES256) 対応 | ⬜未着手 | 大 | 中 |
 | 2 | K2 | 署名鍵の自動ローテーション: `not_after` ベースのスケジュール実行・ACTIVE/RETIRED 自動管理 | ⬜未着手 | 中 | 中 |
 | 3 | S1 | SSL アクセラレーター対応: `X-Forwarded-Proto`/`-For` 信頼設定・HSTS・セキュリティヘッダ（アプリは HTTP 直受け） | ⬜未着手 | 中 | 小〜中 |
-| 4 | C1 | コンテナ分離（API/Web を別サービスに分割・理想形）: workspace 分割・Web→API HTTP 化・内部認証 API・Compose 分離 | 🚧進行中（残 P3-2〜P5） | 大 | 大 |
+| 4 | C1 | コンテナ分離（API/Web を別サービスに分割・理想形）: workspace 分割・Web→API HTTP 化・内部認証 API・Compose 分離 | 🚧進行中（残 P3-3〜P5） | 大 | 大 |
 | 5 | F2 | Refresh Token（rotation・reuse detection、`offline_access` scope） | ⬜未着手 | 大 | 大 |
 | 6 | F3 | Consent（同意画面・同意済み scope 記録・取り消し、`prompt`/`max_age` 正式対応） | ⬜未着手 | 中 | 中 |
 | 7 | F4 | Logout（RP-initiated / front-channel / back-channel、`sso_session.terminated` 有効化） | ⬜未着手 | 中 | 中 |
@@ -50,10 +50,9 @@ OIDC IdP MVP（**Rust + MariaDB**）の実装計画。設計仕様は `docs/OIDC
 ### インフラ / コンテナ分離（C1）
 
 設計は `docs/adr/0007-api-web-service-split.md`（Accepted）で確定。P0（ADR）・P1（workspace 化）・
-P2（内部認証 API）・P3-1（`contracts`＋`web` crate 土台）は完了（`CHANGELOG.md`）。残りの作業:
+P2（内部認証 API）・P3-1（`contracts`＋`web` crate 土台）・P3-2（ログイン画面移設）は完了
+（`CHANGELOG.md`）。残りの作業:
 
-- **P3-2 ログイン画面移設**: `/login`（GET/POST）と i18n を `web` へ移し、POST は API クライアント経由で
-  `POST /internal/authenticate` を呼ぶ。web が Cookie（SSO 発行・auth_session 失効）を組み立てる。
 - **P3-3 管理コンソール移設**: `/admin/console/*`（login/home/clients/users/status/audit-logs）を `web` へ。
   データ取得/操作は api の JSON `/admin/*` を SSO Cookie 転送で呼ぶ（`RequirePerms<IdpAdmin>` 再利用）。
   不足する JSON エンドポイント（client 状況・利用者検索等）は api に追加。CSRF は web 側で維持。

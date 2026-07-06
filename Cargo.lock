@@ -1045,7 +1045,9 @@ dependencies = [
 name = "idp-contracts"
 version = "0.1.0"
 dependencies = [
+ "hex",
  "serde",
+ "sha2",
 ]
 
 [[package]]
@@ -1059,6 +1061,7 @@ dependencies = [
  "base64",
  "chrono",
  "hex",
+ "idp-contracts",
  "jsonwebtoken",
  "rand 0.8.6",
  "rsa",
@@ -1081,6 +1084,7 @@ dependencies = [
  "anyhow",
  "axum",
  "dotenvy",
+ "fluent",
  "idp-contracts",
  "reqwest",
  "serde",
@@ -1089,6 +1093,7 @@ dependencies = [
  "tower-http",
  "tracing",
  "tracing-subscriber",
+ "unic-langid",
  "uuid",
 ]
 

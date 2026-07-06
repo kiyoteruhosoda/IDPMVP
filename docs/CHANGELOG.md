@@ -2,6 +2,21 @@
 
 完了した重要な変更の要約（詳しい経緯は `history/`、設計判断は `adr/`）。
 
+## 2026-07-06（C1 P3-2 完了: ログイン画面を web crate へ移設）
+
+- **ログイン画面（`/login` GET/POST）と i18n を `web` crate へ移設**（ADR-0007 P3-2）。web はフォーム描画と
+  リダイレクトのみを担い、資格情報検証・SSO/code 発行は api の `POST /internal/authenticate` に委ねる。
+  web は接続元情報（`X-Forwarded-For` 由来 IP・User-Agent）を転送し、成功時に api が返す `sso_session_id` を
+  Cookie 化して `redirect_to` へ 302、`auth_session_id` Cookie を失効させる。エラーはローカライズして再描画。
+- **ログイン CSRF 導出を `contracts` に一元化**（`idp_contracts::csrf::login_csrf_token`）。web（フォーム描画）と
+  api（`LoginService` 検証）で同一導出を共有し、固定ベクタのユニットテストで齟齬を防ぐ。core は本関数へ委譲。
+- web に i18n・cookies・correlation・login ハンドラを実装（api の presentation から移植）。api 側の `/login` は
+  当面併存（全部入り E2E 維持のため。撤去は P3-4）。
+- 検証: `cargo build`／`clippy` 警告なし／lib テスト（api 31・core 45・contracts 2・web 7）。**api＋web＋MariaDB を
+  同時起動した実機 E2E**で、api `/authorize` →（別プロセスの）web `/login` GET/POST → api `/internal/authenticate`
+  → SSO Cookie 発行＋`code` 付き RP リダイレクト → api `/token` で `id_token` 発行、まで疎通を確認。web が転送した
+  IP が `sso_sessions.ip_address` に記録されることも確認。
+
 ## 2026-07-06（C1 P3-1 完了: contracts crate ＋ web crate 土台）
 
 - **`contracts` crate（`idp-contracts`）を新設**（ADR-0007 §6）。内部認証 API（`/internal/authenticate*`）の

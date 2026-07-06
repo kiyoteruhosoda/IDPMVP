@@ -27,11 +27,10 @@ const LOCK_DURATION_MINUTES: i64 = 15;
 
 /// `auth_session_id` に紐づく CSRF トークンを導出する。
 ///
-/// AuthSession の id は HttpOnly Cookie のみに存在する推測不能な乱数であり、その一方向ハッシュを
-/// ログインフォームに埋め込む。攻撃者は Cookie を読めないためトークンを再現できない
-/// （同期トークン方式。サーバ側の追加保存は不要）。
+/// 導出は web（フォーム描画）と api（検証）で一致させる必要があるため `idp-contracts` に一元化する
+/// （ADR-0007 §6。同期トークン方式。サーバ側の追加保存は不要）。
 pub fn csrf_token(auth_session_id: &str) -> String {
-    crypto::sha256_hex(&format!("csrf:{auth_session_id}"))
+    idp_contracts::csrf::login_csrf_token(auth_session_id)
 }
 
 #[derive(Debug)]

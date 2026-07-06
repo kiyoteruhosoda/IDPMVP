@@ -10,6 +10,7 @@ name = "idp_core"
 path = "src/lib.rs"
 
 [dependencies]
+idp-contracts = { path = "../contracts" }
 tokio = { workspace = true }
 sqlx = { workspace = true }
 serde = { workspace = true }

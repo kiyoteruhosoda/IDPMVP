@@ -6,3 +6,4 @@
 //! utoipa による OpenAPI は api 側で継続する（外部公開 API の DTO は api の presentation に置く）。
 
 pub mod auth;
+pub mod csrf;
