@@ -7,7 +7,7 @@
 use sqlx::mysql::MySqlPoolOptions;
 use sqlx::Row;
 
-static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
+static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations");
 
 const EXPECTED_TABLES: &[&str] = &[
     "users",

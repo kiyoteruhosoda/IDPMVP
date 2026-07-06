@@ -1,4 +1,4 @@
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    idp::run().await
+    idp_api::run().await
 }

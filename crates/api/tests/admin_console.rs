@@ -10,19 +10,19 @@
 use axum::body::Body;
 use axum::http::header::{CONTENT_TYPE, COOKIE, LOCATION, SET_COOKIE};
 use axum::http::{Request, StatusCode};
-use idp::config::Config;
-use idp::domain::clock::Clock;
-use idp::domain::password::PasswordHasher;
-use idp::infrastructure::crypto;
-use idp::infrastructure::password::Argon2PasswordHasher;
-use idp::presentation::router;
-use idp::presentation::state::AppState;
+use idp_api::config::Config;
+use idp_api::domain::clock::Clock;
+use idp_api::domain::password::PasswordHasher;
+use idp_api::infrastructure::crypto;
+use idp_api::infrastructure::password::Argon2PasswordHasher;
+use idp_api::presentation::router;
+use idp_api::presentation::state::AppState;
 use sqlx::mysql::MySqlPoolOptions;
 use sqlx::MySqlPool;
 use std::sync::Arc;
 use tower::ServiceExt;
 
-static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
+static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations");
 
 /// この 1 バイナリ内の複数テストが `MIGRATOR.run` を同時に呼ぶと、空の DB では作成が競合して
 /// 失敗し得る。マイグレーション適用だけを直列化する（テスト本体は並列のまま）。

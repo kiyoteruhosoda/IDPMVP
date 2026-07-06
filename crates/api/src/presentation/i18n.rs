@@ -1,13 +1,14 @@
 //! ログイン画面の国際化（`fluent`、`CLAUDE.md`「国際化」）。
 //!
-//! 翻訳リソースは `i18n/<lang>/main.ftl` をバイナリへ埋め込む。新規メッセージは英語で定義し、
-//! 日本語訳は `ja` リソースへ手動追記する。MVP の i18n 対象はログイン画面のみ。
+//! 翻訳リソースはリポジトリルートの `i18n/<lang>/main.ftl` をバイナリへ埋め込む。新規メッセージは
+//! 英語で定義し、日本語訳は `ja` リソースへ手動追記する。MVP の i18n 対象はログイン画面のみ。
+//! （ADR-0007 の P3 で i18n は web crate へ移設予定。現時点では crate ルート相対で参照する。）
 
 use fluent::{FluentBundle, FluentResource};
 use unic_langid::{langid, LanguageIdentifier};
 
-const EN_FTL: &str = include_str!("../../i18n/en/main.ftl");
-const JA_FTL: &str = include_str!("../../i18n/ja/main.ftl");
+const EN_FTL: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../i18n/en/main.ftl"));
+const JA_FTL: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../i18n/ja/main.ftl"));
 
 /// 対応ロケール。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

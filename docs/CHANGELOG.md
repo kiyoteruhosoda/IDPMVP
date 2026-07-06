@@ -2,6 +2,20 @@
 
 完了した重要な変更の要約（詳しい経緯は `history/`、設計判断は `adr/`）。
 
+## 2026-07-06（ADR-0007 Accepted・C1 P1 完了: cargo workspace 化）
+
+- **ADR-0007（API/Web サービス分割）を Accepted** とし、C1 の **P1（workspace 化）** を実施。単一クレート
+  `idp` を **cargo workspace** に分割した。`crates/core`（lib=`idp_core`）に domain/application/
+  infrastructure と config/telemetry（sqlx・DB 依存）を集約し、`crates/api`（lib=`idp_api` / bin=`idp`）に
+  presentation と `run()` を置く。api は core を再エクスポートするため presentation 内の `crate::domain` 等の
+  参照は不変。共通依存は `[workspace.dependencies]` で一元管理。
+- **all-in-one を保ったままの crate 境界作成**（P1 の方針どおり。web/contracts crate と Web→API HTTP 化は
+  後続 P2〜P5）。統合テストは `crates/api/tests/` へ移設（参照は `idp_api::*`）。`migrations/`・`i18n/` は
+  リポジトリルート据え置きで、`sqlx::migrate!("../../migrations")`／`include_str!(CARGO_MANIFEST_DIR/../../i18n)`
+  により crate から相対参照する。Dockerfile の builder を workspace ビルドへ更新（bin=`idp` は不変）。
+- 検証: `cargo build --workspace`／`cargo clippy --workspace --all-targets`（警告なし）／lib ユニットテスト
+  45 件パス。外部契約（OIDC・API 経路・バイナリ名）に変更なし。
+
 ## 2026-07-06（A3 完了: 状況確認画面）
 
 - **状況確認画面をサーバレンダリングで実装**（A3 完了、設計仕様 §7）。監査／ログインログ一覧

@@ -1,0 +1,32 @@
+[package]
+name = "idp-core"
+version = "0.1.0"
+edition = "2021"
+description = "OIDC IdP core: domain / application / infrastructure（DB 直結）と設定・ログ基盤"
+license = "MIT"
+
+[lib]
+name = "idp_core"
+path = "src/lib.rs"
+
+[dependencies]
+tokio = { workspace = true }
+sqlx = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+jsonwebtoken = { workspace = true }
+rsa = { workspace = true }
+aes-gcm = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+base64 = { workspace = true }
+rand = { workspace = true }
+argon2 = { workspace = true }
+url = { workspace = true }

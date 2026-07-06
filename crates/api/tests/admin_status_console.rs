@@ -10,17 +10,17 @@
 use axum::body::Body;
 use axum::http::header::{COOKIE, LOCATION};
 use axum::http::{Request, StatusCode};
-use idp::config::Config;
-use idp::domain::clock::Clock;
-use idp::infrastructure::crypto;
-use idp::presentation::router;
-use idp::presentation::state::AppState;
+use idp_api::config::Config;
+use idp_api::domain::clock::Clock;
+use idp_api::infrastructure::crypto;
+use idp_api::presentation::router;
+use idp_api::presentation::state::AppState;
 use sqlx::mysql::MySqlPoolOptions;
 use sqlx::MySqlPool;
 use std::sync::Arc;
 use tower::ServiceExt;
 
-static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
+static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations");
 static MIGRATE_LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
 
 const ADMIN_ID: &str = "00000000-0000-0000-0000-000000000001";

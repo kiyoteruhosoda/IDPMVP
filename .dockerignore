@@ -2,6 +2,6 @@ target
 .git
 .env
 docs
-tests
+crates/api/tests
 **/*.rs.bk
 **/mutants.out*/

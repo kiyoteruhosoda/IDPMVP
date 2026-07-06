@@ -6,15 +6,15 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use chrono::{DateTime, Utc};
-use idp::domain::clock::Clock;
-use idp::presentation::router;
-use idp::presentation::state::AppState;
+use idp_api::domain::clock::Clock;
+use idp_api::presentation::router;
+use idp_api::presentation::state::AppState;
 use serde_json::Value;
 use sqlx::mysql::MySqlPoolOptions;
 use std::sync::Arc;
 use tower::ServiceExt;
 
-static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
+static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations");
 
 struct SystemClock;
 impl Clock for SystemClock {
@@ -58,7 +58,7 @@ async fn register_creates_user_and_rejects_duplicates_and_invalid_input() {
         .expect("connect");
     MIGRATOR.run(&pool).await.expect("migrate");
 
-    let config = Arc::new(idp::config::Config::from_env().expect("load config"));
+    let config = Arc::new(idp_api::config::Config::from_env().expect("load config"));
     let app = router::build(AppState::build(pool.clone(), config, Arc::new(SystemClock)));
 
     // 一意なメールで登録 → 201。

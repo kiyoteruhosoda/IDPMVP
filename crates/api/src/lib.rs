@@ -1,14 +1,14 @@
-//! OIDC IdP のライブラリクレート。
+//! OIDC IdP の API（`idp-api`）。
 //!
-//! バイナリ（`main.rs`）と統合テスト（`tests/`）の双方から各モジュールを参照できるよう、
-//! アプリのロジックはライブラリ側に置く。
+//! axum の presentation 層（OIDC protocol・JSON 管理 API・管理コンソール HTML）とバイナリ起動を担う。
+//! Domain / Application / Infrastructure・設定・ログ基盤は `idp-core` にある。
+//!
+//! ADR-0007（API/Web サービス分割）の P1 として単一 crate を分割した。ここでは core の各モジュールを
+//! 再エクスポートし、presentation 内の `crate::domain` 等の参照と統合テストの参照経路を維持する
+//! （all-in-one を保ったまま crate 境界だけを作る段階）。web crate 化は P3 で行う。
+pub use idp_core::{application, config, domain, infrastructure, telemetry};
 
-pub mod application;
-pub mod config;
-pub mod domain;
-pub mod infrastructure;
 pub mod presentation;
-pub mod telemetry;
 
 use anyhow::Context;
 use std::net::SocketAddr;

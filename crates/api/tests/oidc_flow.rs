@@ -8,19 +8,19 @@
 use axum::body::Body;
 use axum::http::header::{AUTHORIZATION, CONTENT_TYPE, COOKIE, LOCATION, SET_COOKIE};
 use axum::http::{Request, StatusCode};
-use idp::config::Config;
-use idp::domain::clock::Clock;
-use idp::domain::password::PasswordHasher as _;
-use idp::infrastructure::password::Argon2PasswordHasher;
-use idp::presentation::router;
-use idp::presentation::state::AppState;
+use idp_api::config::Config;
+use idp_api::domain::clock::Clock;
+use idp_api::domain::password::PasswordHasher as _;
+use idp_api::infrastructure::password::Argon2PasswordHasher;
+use idp_api::presentation::router;
+use idp_api::presentation::state::AppState;
 use serde_json::{json, Value};
 use sqlx::mysql::MySqlPoolOptions;
 use sqlx::{MySqlPool, Row};
 use std::sync::Arc;
 use tower::ServiceExt;
 
-static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
+static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations");
 
 // RFC 7636 Appendix B のテストベクタ（S256）。
 const CODE_VERIFIER: &str = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";

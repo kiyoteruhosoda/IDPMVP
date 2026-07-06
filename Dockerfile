@@ -12,17 +12,24 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends build-essential perl pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
-# 依存解決を層キャッシュに乗せる（マニフェストのみ先にコピー）。
+# cargo ワークスペース（ADR-0007 P1: crates/core・crates/api）をビルドする。
+# 依存解決を層キャッシュに乗せるため、マニフェスト類を先にコピーしてダミービルドする。
 COPY Cargo.toml Cargo.lock ./
-RUN mkdir src && echo "fn main() {}" > src/main.rs \
-    && cargo build --release --locked \
-    && rm -rf src
+COPY crates/core/Cargo.toml crates/core/Cargo.toml
+COPY crates/api/Cargo.toml crates/api/Cargo.toml
+RUN mkdir -p crates/core/src crates/api/src \
+    && echo "" > crates/core/src/lib.rs \
+    && echo "" > crates/api/src/lib.rs \
+    && echo "fn main() {}" > crates/api/src/main.rs \
+    && cargo build --release --locked --bin idp \
+    ; rm -rf crates/core/src crates/api/src
 
-# 本体をビルド。
-COPY src ./src
+# 本体をビルド。i18n（include_str! で埋め込み）と migrations（sqlx::migrate! で埋め込み）は
+# crate マニフェスト基準の相対パス（../../i18n・../../migrations）で参照するためルートへ配置する。
+COPY crates ./crates
 COPY i18n ./i18n
-# ダミー main のタイムスタンプより新しくして確実に再ビルドさせる。
-RUN touch src/main.rs && cargo build --release --locked
+COPY migrations ./migrations
+RUN cargo build --release --locked --bin idp
 
 # ---- migrate ----
 # DDL / マスタデータ適用の専用ジョブ（sqlx migrate run）。CLAUDE.md schema-version 方針に従い、

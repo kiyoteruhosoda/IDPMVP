@@ -7,8 +7,9 @@ use sqlx::Executor;
 /// アプリ全体で共有する DB プールの型エイリアス。
 pub type Db = MySqlPool;
 
-/// 埋め込みマイグレーション（`migrations/`）。CI・照合で参照する。
-static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
+/// 埋め込みマイグレーション（リポジトリルートの `migrations/`）。CI・照合で参照する。
+/// パスは crate（`idp-core`）のマニフェスト基準。ワークスペースルートの `migrations/` を指す。
+static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations");
 
 pub async fn connect(config: &Config) -> Result<Db, sqlx::Error> {
     MySqlPoolOptions::new()

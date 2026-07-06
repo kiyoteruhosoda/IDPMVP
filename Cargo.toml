@@ -1,11 +1,11 @@
-[package]
-name = "idp"
-version = "0.1.0"
-edition = "2021"
-description = "OpenID Connect Identity Provider (MVP)"
-license = "MIT"
+[workspace]
+resolver = "2"
+members = ["crates/core", "crates/api"]
 
-[dependencies]
+# ワークスペース共通の依存バージョン（各 crate は `workspace = true` で参照する）。
+# ADR-0007（API/Web サービス分割）の P1: 単一 crate を core（domain/application/infrastructure）と
+# api（presentation + バイナリ）へ分割した。web / contracts crate は P3 で追加する。
+[workspace.dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "net"] }
 axum = { version = "0.8", features = ["macros"] }
 tower = "0.5"
@@ -43,6 +43,3 @@ utoipa = { version = "5", features = ["axum_extras", "chrono", "uuid"] }
 utoipa-swagger-ui = { version = "9", features = ["axum", "vendored"] }
 fluent = "0.17"
 unic-langid = { version = "0.9", features = ["macros"] }
-
-[dev-dependencies]
-tower = { version = "0.5", features = ["util"] }

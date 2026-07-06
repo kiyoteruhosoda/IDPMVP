@@ -9,18 +9,18 @@
 use axum::body::Body;
 use axum::http::header::{CONTENT_TYPE, COOKIE};
 use axum::http::{Request, StatusCode};
-use idp::config::Config;
-use idp::domain::clock::Clock;
-use idp::infrastructure::crypto;
-use idp::presentation::router;
-use idp::presentation::state::AppState;
+use idp_api::config::Config;
+use idp_api::domain::clock::Clock;
+use idp_api::infrastructure::crypto;
+use idp_api::presentation::router;
+use idp_api::presentation::state::AppState;
 use serde_json::{json, Value};
 use sqlx::mysql::MySqlPoolOptions;
 use sqlx::MySqlPool;
 use std::sync::Arc;
 use tower::ServiceExt;
 
-static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
+static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations");
 
 /// seed 0002 の初期管理者 id（seed 0004 で idp.admin を付与済み）。
 const ADMIN_ID: &str = "00000000-0000-0000-0000-000000000001";

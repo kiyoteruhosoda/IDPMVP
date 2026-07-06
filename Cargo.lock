@@ -955,12 +955,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "idp"
+name = "idp-api"
 version = "0.1.0"
 dependencies = [
- "aes-gcm",
  "anyhow",
- "argon2",
  "async-trait",
  "axum",
  "base64",
@@ -968,10 +966,10 @@ dependencies = [
  "dotenvy",
  "fluent",
  "hex",
+ "idp-core",
  "jsonwebtoken",
  "percent-encoding",
  "rand",
- "rsa",
  "serde",
  "serde_json",
  "sha2",
@@ -981,11 +979,36 @@ dependencies = [
  "tower",
  "tower-http",
  "tracing",
- "tracing-subscriber",
  "unic-langid",
  "url",
  "utoipa",
  "utoipa-swagger-ui",
+ "uuid",
+]
+
+[[package]]
+name = "idp-core"
+version = "0.1.0"
+dependencies = [
+ "aes-gcm",
+ "anyhow",
+ "argon2",
+ "async-trait",
+ "base64",
+ "chrono",
+ "hex",
+ "jsonwebtoken",
+ "rand",
+ "rsa",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sqlx",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "url",
  "uuid",
 ]
 
