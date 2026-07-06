@@ -7,3 +7,4 @@ pub mod client;
 pub mod signing_key;
 pub mod sso_session;
 pub mod user;
+pub mod user_permission;

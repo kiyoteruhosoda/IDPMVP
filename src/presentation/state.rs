@@ -3,8 +3,11 @@
 //! [`AppState::build`] がユースケースの組み立て（依存注入）を一手に担う。
 //! バイナリ（`lib.rs::run`）と統合テストの双方から同じ組み立てを使う。
 
+use crate::application::admin_access::AdminAccessService;
 use crate::application::audit::AuditService;
+use crate::application::audit_query::AuditQueryService;
 use crate::application::authorize::AuthorizeService;
+use crate::application::client_management::ClientManagementService;
 use crate::application::code_issuance::CodeIssuanceService;
 use crate::application::key_service::KeyService;
 use crate::application::login::LoginService;
@@ -16,13 +19,14 @@ use crate::domain::clock::Clock;
 use crate::infrastructure::db::Db;
 use crate::infrastructure::password::Argon2PasswordHasher;
 use crate::infrastructure::rate_limit::InMemoryLoginRateLimiter;
-use crate::infrastructure::repositories::audit_log::SqlxAuditLogSink;
+use crate::infrastructure::repositories::audit_log::{SqlxAuditLogQuery, SqlxAuditLogSink};
 use crate::infrastructure::repositories::auth_session::SqlxAuthSessionRepository;
 use crate::infrastructure::repositories::authorization_code::SqlxAuthorizationCodeRepository;
 use crate::infrastructure::repositories::client::SqlxClientRepository;
 use crate::infrastructure::repositories::signing_key::SqlxSigningKeyRepository;
 use crate::infrastructure::repositories::sso_session::SqlxSsoSessionRepository;
 use crate::infrastructure::repositories::user::SqlxUserRepository;
+use crate::infrastructure::repositories::user_permission::SqlxUserPermissionRepository;
 use axum::extract::FromRef;
 use std::sync::Arc;
 
@@ -40,6 +44,9 @@ pub struct AppState {
     pub token: Arc<TokenService>,
     pub userinfo: Arc<UserInfoService>,
     pub keys: Arc<KeyService>,
+    pub admin_access: Arc<AdminAccessService>,
+    pub clients_admin: Arc<ClientManagementService>,
+    pub audit_query: Arc<AuditQueryService>,
 }
 
 impl AppState {
@@ -51,7 +58,9 @@ impl AppState {
         let sso_sessions = Arc::new(SqlxSsoSessionRepository::new(pool.clone()));
         let codes = Arc::new(SqlxAuthorizationCodeRepository::new(pool.clone()));
         let signing_keys = Arc::new(SqlxSigningKeyRepository::new(pool.clone()));
+        let user_permissions = Arc::new(SqlxUserPermissionRepository::new(pool.clone()));
         let audit_sink = Arc::new(SqlxAuditLogSink::new(pool.clone()));
+        let audit_logs = Arc::new(SqlxAuditLogQuery::new(pool.clone()));
         let hasher = Arc::new(Argon2PasswordHasher::new());
         let rate_limiter = Arc::new(InMemoryLoginRateLimiter::new(
             LOGIN_RATE_LIMIT_MAX_ATTEMPTS,
@@ -90,7 +99,7 @@ impl AppState {
         let login = Arc::new(LoginService::new(
             users.clone(),
             auth_sessions,
-            sso_sessions,
+            sso_sessions.clone(),
             code_issuance,
             hasher.clone(),
             rate_limiter,
@@ -99,6 +108,13 @@ impl AppState {
             config.sso_idle_ttl(),
             config.sso_absolute_ttl(),
         ));
+        let clients_admin = Arc::new(ClientManagementService::new(
+            clients.clone(),
+            hasher.clone(),
+            audit.clone(),
+            clock.clone(),
+        ));
+        let audit_query = Arc::new(AuditQueryService::new(audit_logs));
         let token = Arc::new(TokenService::new(
             clients,
             users.clone(),
@@ -113,10 +129,16 @@ impl AppState {
         ));
         let userinfo = Arc::new(UserInfoService::new(
             signing_keys,
-            users,
-            clock,
+            users.clone(),
+            clock.clone(),
             config.issuer().to_string(),
             config.clock_skew(),
+        ));
+        let admin_access = Arc::new(AdminAccessService::new(
+            sso_sessions,
+            users,
+            user_permissions,
+            clock,
         ));
 
         Self {
@@ -128,6 +150,9 @@ impl AppState {
             token,
             userinfo,
             keys,
+            admin_access,
+            clients_admin,
+            audit_query,
         }
     }
 }

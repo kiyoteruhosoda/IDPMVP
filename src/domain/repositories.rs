@@ -5,7 +5,7 @@
 //! メソッドは各フェーズで実装する際に必要に応じて拡張する。
 #![allow(dead_code)]
 
-use crate::domain::audit::AuditEvent;
+use crate::domain::audit::{AuditEvent, AuditLogEntry, AuditLogFilter};
 use crate::domain::auth_session::AuthSession;
 use crate::domain::authorization_code::AuthorizationCode;
 use crate::domain::client::Client;
@@ -37,6 +37,13 @@ pub trait UserRepository: Send + Sync {
 #[async_trait]
 pub trait ClientRepository: Send + Sync {
     async fn find_by_client_id(&self, client_id: &str) -> Result<Option<Client>>;
+    /// クライアント（RP）を新規登録する（管理 API、設計仕様 §9.3）。`client_id` 重複は `Conflict`。
+    async fn create(&self, client: &Client) -> Result<()>;
+    /// 登録済みクライアントを新しい順に一覧する（管理画面 A3・A1）。
+    async fn list(&self) -> Result<Vec<Client>>;
+    /// 可変項目（app_name / redirect_uris / scopes / status / secret_hash 等）を更新する。
+    /// 主キー `id` で対象を特定する。対象が無い場合は `NotFound`。
+    async fn update(&self, client: &Client) -> Result<()>;
 }
 
 #[async_trait]
@@ -87,4 +94,27 @@ pub trait SigningKeyRepository: Send + Sync {
 #[async_trait]
 pub trait AuditLogSink: Send + Sync {
     async fn record(&self, event: &AuditEvent) -> Result<()>;
+}
+
+/// `audit_log` の読み取り（状況確認画面 A3）。書き込み（`AuditLogSink`）とは関心を分ける。
+#[async_trait]
+pub trait AuditLogQuery: Send + Sync {
+    /// 条件に一致する監査ログを新しい順（`occurred_at` 降順、同時刻は `id` 降順）に返す。
+    async fn search(&self, filter: &AuditLogFilter) -> Result<Vec<AuditLogEntry>>;
+}
+
+/// 利用者が保有する権限コード（ADR-0006）の参照・付与・剥奪（DIP 境界）。
+///
+/// OIDC scope（`ClientRepository` 側の関心）とは別軸。保護ユースケースは本トレイト越しに
+/// 「利用者が必要権限を保有するか」を判定する。付与/剥奪は管理コンソール（A2）が用いる。
+#[async_trait]
+pub trait UserPermissionRepository: Send + Sync {
+    /// 利用者が保有する権限コード一覧を返す（順序は不定）。
+    async fn list_codes_for_user(&self, user_id: Uuid) -> Result<Vec<String>>;
+    /// 利用者が指定の権限コードを保有するか。
+    async fn has_permission(&self, user_id: Uuid, code: &str) -> Result<bool>;
+    /// 権限を付与する（冪等: 既存付与は何もしない）。`code` は `permissions` マスタに存在すること。
+    async fn grant(&self, user_id: Uuid, code: &str, granted_at: DateTime<Utc>) -> Result<()>;
+    /// 権限を剥奪する（不存在でもエラーにしない）。
+    async fn revoke(&self, user_id: Uuid, code: &str) -> Result<()>;
 }

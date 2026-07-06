@@ -17,6 +17,8 @@ const EXPECTED_TABLES: &[&str] = &[
     "authorization_codes",
     "signing_keys",
     "audit_log",
+    "permissions",
+    "user_permissions",
 ];
 
 #[tokio::test]
@@ -45,4 +47,15 @@ async fn migrations_apply_and_all_tables_exist() {
         let count: i64 = row.get("c");
         assert_eq!(count, 1, "table `{table}` must exist after migration");
     }
+
+    // seed (0004): 初期管理者へ idp.admin が冪等に付与されていること（ADR-0006 §4）。
+    let row = sqlx::query(
+        "SELECT COUNT(*) AS c FROM user_permissions \
+         WHERE user_id = '00000000-0000-0000-0000-000000000001' AND permission_code = 'idp.admin'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("query user_permissions seed");
+    let count: i64 = row.get("c");
+    assert_eq!(count, 1, "initial admin must be granted idp.admin by seed");
 }

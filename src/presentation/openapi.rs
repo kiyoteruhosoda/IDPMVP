@@ -5,8 +5,9 @@
 //! DTO の `ToSchema` から組み立てられる。
 
 use crate::presentation::dto::{
-    OAuthErrorResponse, RegisterRequest, RegisterResponse, TokenRequest, TokenResponse,
-    UserInfoResponse,
+    AuditLogEntryResponse, ClientCreatedResponse, ClientRegisterRequest, ClientResponse,
+    ClientSecretResponse, ClientUpdateRequest, OAuthErrorResponse, RegisterRequest,
+    RegisterResponse, TokenRequest, TokenResponse, UserInfoResponse,
 };
 use crate::presentation::handlers;
 use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme};
@@ -25,6 +26,12 @@ use utoipa::{Modify, OpenApi};
         handlers::userinfo::userinfo,
         handlers::discovery::openid_configuration,
         handlers::discovery::jwks,
+        handlers::admin_clients::create_client,
+        handlers::admin_clients::list_clients,
+        handlers::admin_clients::get_client,
+        handlers::admin_clients::update_client,
+        handlers::admin_clients::rotate_client_secret,
+        handlers::admin_audit::list_audit_logs,
     ),
     components(schemas(
         RegisterRequest,
@@ -33,11 +40,18 @@ use utoipa::{Modify, OpenApi};
         TokenResponse,
         UserInfoResponse,
         OAuthErrorResponse,
+        ClientRegisterRequest,
+        ClientUpdateRequest,
+        ClientResponse,
+        ClientCreatedResponse,
+        ClientSecretResponse,
+        AuditLogEntryResponse,
     )),
     modifiers(&BearerToken),
     tags(
         (name = "oidc", description = "OIDC コアエンドポイント"),
         (name = "auth", description = "ユーザー登録・認証"),
+        (name = "admin", description = "管理 API（idp.admin 権限が必要。内部用）"),
     )
 )]
 pub struct ApiDoc;

@@ -10,6 +10,7 @@ pub mod client;
 pub mod clock;
 pub mod error;
 pub mod password;
+pub mod permission;
 pub mod pkce;
 pub mod rate_limit;
 pub mod repositories;
