@@ -109,6 +109,9 @@ pub trait AuditLogQuery: Send + Sync {
 /// 「利用者が必要権限を保有するか」を判定する。付与/剥奪は管理コンソール（A2）が用いる。
 #[async_trait]
 pub trait UserPermissionRepository: Send + Sync {
+    /// 付与可能な権限コードの一覧（`permissions` マスタ）を昇順で返す。
+    /// 管理コンソール（A2）の付与フォームで選択肢を提示するために使う。
+    async fn list_available_codes(&self) -> Result<Vec<String>>;
     /// 利用者が保有する権限コード一覧を返す（順序は不定）。
     async fn list_codes_for_user(&self, user_id: Uuid) -> Result<Vec<String>>;
     /// 利用者が指定の権限コードを保有するか。

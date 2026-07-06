@@ -3,7 +3,7 @@
 use crate::presentation::correlation;
 use crate::presentation::handlers::{
     admin, admin_audit, admin_clients, admin_clients_console, admin_console, admin_permissions,
-    authorize, discovery, health, login, register, token, userinfo,
+    admin_users_console, authorize, discovery, health, login, register, token, userinfo,
 };
 use crate::presentation::openapi::ApiDoc;
 use crate::presentation::state::AppState;
@@ -48,6 +48,20 @@ pub fn build(state: AppState) -> Router {
         .route(
             "/admin/console/clients/{client_id}/rotate-secret",
             post(admin_clients_console::rotate_secret),
+        )
+        // 利用者権限の付与・剥奪画面（A2、ADR-0006）。JSON API（/admin/users/*）とは経路を分ける。
+        .route("/admin/console/users", get(admin_users_console::search))
+        .route(
+            "/admin/console/users/{user_id}/permissions",
+            get(admin_users_console::view),
+        )
+        .route(
+            "/admin/console/users/{user_id}/permissions/grant",
+            post(admin_users_console::grant),
+        )
+        .route(
+            "/admin/console/users/{user_id}/permissions/revoke",
+            post(admin_users_console::revoke),
         )
         // 疎通確認用の内部 API（idp.admin 必須。RequirePerms<IdpAdmin>）。
         .route("/admin/whoami", get(admin::whoami))

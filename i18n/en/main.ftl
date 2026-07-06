@@ -63,3 +63,25 @@ admin-client-not-found-title = Client not found
 admin-client-not-found-message = The client you requested does not exist.
 admin-client-error-type = Invalid client type. Choose public or confidential.
 admin-client-error-status = Invalid status. Choose ACTIVE or DISABLED.
+
+# User permission management screens (A2).
+admin-users-title = User permissions
+admin-users-search-label = Find a user by email or username
+admin-users-search-hint = Enter the exact email address or username.
+admin-users-search-button = Search
+admin-users-search-none = No user matches that email or username.
+admin-users-back = Back to user search
+admin-user-col-email = Email
+admin-user-col-username = Username
+admin-user-col-id = User ID
+admin-user-col-status = Status
+admin-user-manage-permissions = Manage permissions
+admin-user-not-found-title = User not found
+admin-user-not-found-message = The user you requested does not exist.
+admin-permissions-current = Current permissions
+admin-permissions-none = This user has no permissions.
+admin-permissions-grant-title = Grant a permission
+admin-permissions-grant-label = Permission code
+admin-permissions-grant-button = Grant
+admin-permissions-revoke-button = Revoke
+admin-permission-error-unknown = Unknown permission code. Choose one of the available codes.

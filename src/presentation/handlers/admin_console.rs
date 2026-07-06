@@ -42,7 +42,7 @@ pub async fn home(AdminHtmlSession(admin): AdminHtmlSession, headers: HeaderMap)
          <ul class=\"admin-sections\">\n\
          <li><a href=\"/admin/console/clients\">{clients}</a></li>\n\
          <li>{audit}</li>\n\
-         <li>{permissions}</li>\n\
+         <li><a href=\"/admin/console/users\">{permissions}</a></li>\n\
          </ul>",
         intro = messages.get("admin-home-intro"),
         clients = messages.get("admin-nav-clients"),

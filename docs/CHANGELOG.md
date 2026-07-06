@@ -2,6 +2,24 @@
 
 完了した重要な変更の要約（詳しい経緯は `history/`、設計判断は `adr/`）。
 
+## 2026-07-06（A2 完了: 利用者権限の付与・剥奪画面）
+
+- **利用者権限の付与・剥奪のサーバレンダリング画面を実装**（A2 完了、ADR-0006）。`/admin/console/users*` に
+  利用者検索（メール／ユーザー名）・保有権限の一覧・付与フォーム（付与可能コードの datalist 付き）・
+  剥奪ボタンを提供。画面用 extractor `AdminHtmlSession` で保護し、共通レイアウト `render_layout`（A2）の
+  上に描画する。データ操作は JSON API と同じ `PermissionManagementService` を通し、検証・監査記録を二重化しない。
+- **経路分離**: ブラウザ向けコンソールは `/admin/console/users*`、JSON 管理 API（OpenAPI の正典）は
+  `/admin/users/{user_id}/permissions` のまま。付与・剥奪の POST は Post/Redirect/Get で権限画面へ 302 し、
+  失敗（CSRF 不一致・未知コード等）は `error` クエリで伝える（二重送信の回避）。CSRF は SSO セッション id
+  由来の同期トークン `console_csrf_token`。利用者入力は `presentation::html::escape` を通し格納型 XSS を防止。
+- Application の `PermissionManagementService` に画面用の読み取り（識別子→利用者解決 `find_user_by_identifier`・
+  表示用 `get_user`・付与可能コード一覧 `available_codes`）を追加。付与可能コードは `permissions` マスタを
+  単一の出所とし、`UserPermissionRepository::list_available_codes` で取得する（許可値の直書き重複なし）。
+- 単体テスト（検索結果／権限画面のレンダリングと HTML エスケープ・エラークエリ→i18n キー写像・
+  リダイレクト先の検証、サービスの識別子解決／付与可能コード）と統合テスト `tests/admin_users_console.rs`
+  （未認証→ログイン画面へ 302、非管理者→403、メール／ユーザー名検索、CSRF 不一致・未知コード→302 error、
+  付与／剥奪の 302 と `audit_log` 記録、不存在・非 UUID→404）を追加。
+
 ## 2026-07-06（A1: クライアント（RP）管理画面、A2 コンソール基盤の上に実装）
 
 - **クライアント（RP）管理のサーバレンダリング画面を実装**（A1 完了、設計仕様 §9.3）。一覧・新規登録・

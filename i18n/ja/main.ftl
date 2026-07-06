@@ -63,3 +63,25 @@ admin-client-not-found-title = クライアントが見つかりません
 admin-client-not-found-message = 指定されたクライアントは存在しません。
 admin-client-error-type = クライアント種別が不正です。public または confidential を選んでください。
 admin-client-error-status = 状態が不正です。ACTIVE または DISABLED を選んでください。
+
+# 利用者権限の管理画面（A2）。
+admin-users-title = 利用者権限
+admin-users-search-label = メールアドレスまたはユーザー名で利用者を検索
+admin-users-search-hint = 正確なメールアドレスまたはユーザー名を入力してください。
+admin-users-search-button = 検索
+admin-users-search-none = 該当する利用者が見つかりません。
+admin-users-back = 利用者検索へ戻る
+admin-user-col-email = メールアドレス
+admin-user-col-username = ユーザー名
+admin-user-col-id = 利用者 ID
+admin-user-col-status = 状態
+admin-user-manage-permissions = 権限を管理
+admin-user-not-found-title = 利用者が見つかりません
+admin-user-not-found-message = 指定された利用者は存在しません。
+admin-permissions-current = 保有権限
+admin-permissions-none = この利用者は権限を保有していません。
+admin-permissions-grant-title = 権限を付与
+admin-permissions-grant-label = 権限コード
+admin-permissions-grant-button = 付与
+admin-permissions-revoke-button = 剥奪
+admin-permission-error-unknown = 未知の権限コードです。付与可能なコードから選んでください。
