@@ -1,7 +1,9 @@
 //! web の axum ルータ組立。管理コンソールは後続ステージで追加する。
 
 use crate::correlation;
-use crate::handlers::{admin_clients_console, admin_console, health, login};
+use crate::handlers::{
+    admin_clients_console, admin_console, admin_users_console, health, login,
+};
 use crate::state::WebState;
 use axum::routing::{get, post};
 use axum::Router;
@@ -36,6 +38,20 @@ pub fn build(state: WebState) -> Router {
         .route(
             "/admin/console/clients/{client_id}/rotate-secret",
             post(admin_clients_console::rotate_secret),
+        )
+        // 利用者権限の付与・剥奪画面。
+        .route("/admin/console/users", get(admin_users_console::search))
+        .route(
+            "/admin/console/users/{user_id}/permissions",
+            get(admin_users_console::view),
+        )
+        .route(
+            "/admin/console/users/{user_id}/permissions/grant",
+            post(admin_users_console::grant),
+        )
+        .route(
+            "/admin/console/users/{user_id}/permissions/revoke",
+            post(admin_users_console::revoke),
         )
         .layer(axum::middleware::from_fn(correlation::propagate))
         .layer(TraceLayer::new_for_http())

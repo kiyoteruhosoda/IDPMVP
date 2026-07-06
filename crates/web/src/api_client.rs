@@ -5,7 +5,9 @@
 //! を付与して呼ぶ。DTO は `idp-contracts` で api と共有し、コンパイル時に契約整合を保証する。
 
 use crate::admin_dto::{ApiErrorBody, ClientCreatedView, ClientSecretView, ClientView};
-use idp_contracts::admin::WhoamiResponse;
+use idp_contracts::admin::{
+    AvailablePermissionsResponse, UserPermissionsResponse, UserSummaryResponse, WhoamiResponse,
+};
 use idp_contracts::auth::{
     InternalAdminAuthenticateRequest, InternalAdminAuthenticateResponse, InternalAuthenticateRequest,
     InternalAuthenticateResponse, InternalLogoutRequest,
@@ -222,6 +224,111 @@ impl ApiClient {
         .await
     }
 
+    // ── 利用者・権限（管理コンソールの権限画面）─────────────────────────────────
+
+    /// 利用者検索（`GET /admin/users?q=`）。該当なしは `NotFound`。
+    pub async fn search_user(
+        &self,
+        correlation_id: &str,
+        sso: &str,
+        q: &str,
+    ) -> Result<UserSummaryResponse, AdminApiError> {
+        let req = self
+            .http
+            .get(format!("{}/admin/users", self.base_url))
+            .query(&[("q", q)])
+            .header(REQUEST_ID_HEADER, correlation_id)
+            .header(
+                reqwest::header::COOKIE,
+                format!("{SSO_SESSION_COOKIE}={sso}"),
+            );
+        let response = req
+            .send()
+            .await
+            .map_err(|e| AdminApiError::Transport(e.to_string()))?;
+        Self::handle_admin_response(response, "/admin/users").await
+    }
+
+    /// 利用者取得（`GET /admin/users/{id}`）。
+    pub async fn get_user(
+        &self,
+        correlation_id: &str,
+        sso: &str,
+        user_id: &str,
+    ) -> Result<UserSummaryResponse, AdminApiError> {
+        self.admin_send(
+            Method::GET,
+            &format!("/admin/users/{user_id}"),
+            correlation_id,
+            sso,
+            None,
+        )
+        .await
+    }
+
+    /// 付与可能な権限コード（`GET /admin/permissions`）。
+    pub async fn available_permissions(
+        &self,
+        correlation_id: &str,
+        sso: &str,
+    ) -> Result<AvailablePermissionsResponse, AdminApiError> {
+        self.admin_send(Method::GET, "/admin/permissions", correlation_id, sso, None)
+            .await
+    }
+
+    /// 保有権限一覧（`GET /admin/users/{id}/permissions`）。
+    pub async fn list_user_permissions(
+        &self,
+        correlation_id: &str,
+        sso: &str,
+        user_id: &str,
+    ) -> Result<UserPermissionsResponse, AdminApiError> {
+        self.admin_send(
+            Method::GET,
+            &format!("/admin/users/{user_id}/permissions"),
+            correlation_id,
+            sso,
+            None,
+        )
+        .await
+    }
+
+    /// 権限付与（`POST /admin/users/{id}/permissions`）。
+    pub async fn grant_permission(
+        &self,
+        correlation_id: &str,
+        sso: &str,
+        user_id: &str,
+        code: &str,
+    ) -> Result<UserPermissionsResponse, AdminApiError> {
+        self.admin_send(
+            Method::POST,
+            &format!("/admin/users/{user_id}/permissions"),
+            correlation_id,
+            sso,
+            Some(serde_json::json!({ "permission_code": code })),
+        )
+        .await
+    }
+
+    /// 権限剥奪（`DELETE /admin/users/{id}/permissions/{code}`）。
+    pub async fn revoke_permission(
+        &self,
+        correlation_id: &str,
+        sso: &str,
+        user_id: &str,
+        code: &str,
+    ) -> Result<UserPermissionsResponse, AdminApiError> {
+        self.admin_send(
+            Method::DELETE,
+            &format!("/admin/users/{user_id}/permissions/{code}"),
+            correlation_id,
+            sso,
+            None,
+        )
+        .await
+    }
+
     /// `/admin/*`（`RequirePerms<IdpAdmin>`）への共通呼び出し。管理者の SSO Cookie と correlation_id を
     /// 転送し、api のステータスを web の [`AdminApiError`] へ写す。成功時は本文を `T` へデコードする。
     async fn admin_send<T>(
@@ -250,7 +357,17 @@ impl ApiClient {
             .send()
             .await
             .map_err(|e| AdminApiError::Transport(e.to_string()))?;
+        Self::handle_admin_response(response, path).await
+    }
 
+    /// api の `/admin/*` 応答を `T` かエラーへ写す共通処理。
+    async fn handle_admin_response<T>(
+        response: reqwest::Response,
+        path: &str,
+    ) -> Result<T, AdminApiError>
+    where
+        T: serde::de::DeserializeOwned,
+    {
         let status = response.status();
         if status.is_success() {
             return response

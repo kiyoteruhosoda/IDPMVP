@@ -3,8 +3,8 @@
 use crate::presentation::correlation;
 use crate::presentation::handlers::{
     admin, admin_audit, admin_clients, admin_clients_console, admin_console, admin_permissions,
-    admin_status_console, admin_users_console, authorize, discovery, health, internal_auth, login,
-    register, token, userinfo,
+    admin_status_console, admin_users, admin_users_console, authorize, discovery, health,
+    internal_auth, login, register, token, userinfo,
 };
 use crate::presentation::openapi::ApiDoc;
 use crate::presentation::state::AppState;
@@ -103,6 +103,16 @@ pub fn build(state: AppState) -> Router {
             "/admin/clients/{client_id}/secret",
             post(admin_clients::rotate_client_secret),
         )
+        // 付与可能な権限コード（マスタ）と利用者検索・取得（管理コンソール支援 API）。idp.admin 必須。
+        .route(
+            "/admin/permissions",
+            get(admin_permissions::list_available_permissions),
+        )
+        .route(
+            "/admin/users",
+            get(admin_users::search_user),
+        )
+        .route("/admin/users/{user_id}", get(admin_users::get_user))
         // 利用者権限の付与・剥奪・参照（A2、ADR-0006）。idp.admin 必須。
         .route(
             "/admin/users/{user_id}/permissions",

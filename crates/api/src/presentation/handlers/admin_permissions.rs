@@ -17,6 +17,22 @@ use axum::http::HeaderMap;
 use axum::Json;
 use uuid::Uuid;
 
+/// 付与可能な権限コード（`permissions` マスタ）を一覧する（`GET /admin/permissions`）。
+/// 管理コンソール（web）の付与フォームの選択肢に使う支援 API。
+pub async fn list_available_permissions(
+    RequirePerms(_admin, _): RequirePerms<IdpAdmin>,
+    State(state): State<AppState>,
+) -> Result<Json<idp_contracts::admin::AvailablePermissionsResponse>, ApiError> {
+    let codes = state
+        .permissions_admin
+        .available_codes()
+        .await
+        .map_err(map_error)?;
+    Ok(Json(idp_contracts::admin::AvailablePermissionsResponse {
+        codes,
+    }))
+}
+
 /// 対象利用者が保有する権限コードを一覧する。
 #[utoipa::path(
     get,

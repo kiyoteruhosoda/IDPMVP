@@ -12,3 +12,32 @@ pub struct WhoamiResponse {
     /// 認可済み管理利用者の内部 ID（UUID 文字列）。
     pub user_id: String,
 }
+
+/// 利用者の要約（`GET /admin/users?q=` 検索・`GET /admin/users/{id}` の応答）。管理コンソールの
+/// 権限画面が対象利用者を特定・表示するために用いる。パスワードハッシュ等の機微情報は含めない。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserSummaryResponse {
+    pub id: String,
+    pub sub: String,
+    pub email: String,
+    pub email_verified: bool,
+    #[serde(default)]
+    pub preferred_username: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
+    /// `ACTIVE` / `DISABLED` 等。
+    pub status: String,
+}
+
+/// 付与可能な権限コード（`GET /admin/permissions`。`permissions` マスタ由来）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AvailablePermissionsResponse {
+    pub codes: Vec<String>,
+}
+
+/// 利用者の保有権限コード一覧（`GET/POST /admin/users/{id}/permissions`・剥奪の応答）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserPermissionsResponse {
+    pub user_id: String,
+    pub permission_codes: Vec<String>,
+}
