@@ -2,6 +2,7 @@
 //!
 //! ドメイン層のトレイトを介して Infrastructure に依存する（具象に直接依存しない）。
 
+pub mod admin_access;
 pub mod audit;
 pub mod authorize;
 pub mod code_issuance;

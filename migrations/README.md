@@ -19,3 +19,6 @@ sqlx マイグレーション（MariaDB）を管理する。
   authorization_codes / signing_keys / audit_log）。
 - `0002_seed_initial_admin`: 初期管理ユーザー（`admin@example.com`）の seed。「変更前提のデフォルト値」
   として冪等 upsert。既定パスワードの変更手順は `docs/OPERATIONS.md`。
+- `0003_permissions_and_user_permissions`: 利用者権限モデル（ADR-0006）。`permissions`（権限コードの
+  マスタ）と `user_permissions`（利用者↔権限の多対多）を追加。OIDC scope とは別軸の内部認可。
+- `0004_seed_admin_permission`: 権限コード `idp.admin` の seed と、初期管理者への冪等付与。

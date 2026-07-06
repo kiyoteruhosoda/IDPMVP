@@ -2,7 +2,7 @@
 
 use crate::presentation::correlation;
 use crate::presentation::handlers::{
-    authorize, discovery, health, login, register, token, userinfo,
+    admin, authorize, discovery, health, login, register, token, userinfo,
 };
 use crate::presentation::openapi::ApiDoc;
 use crate::presentation::state::AppState;
@@ -21,6 +21,8 @@ pub fn build(state: AppState) -> Router {
         .route("/login", get(login::login_page).post(login::login))
         .route("/token", post(token::token))
         .route("/userinfo", get(userinfo::userinfo))
+        // 管理コンソール（A2 基盤）。idp.admin 権限が必要（RequirePerms<IdpAdmin>）。内部用。
+        .route("/admin/whoami", get(admin::whoami))
         .route(
             "/.well-known/openid-configuration",
             get(discovery::openid_configuration),

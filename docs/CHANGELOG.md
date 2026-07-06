@@ -2,6 +2,18 @@
 
 完了した重要な変更の要約（詳しい経緯は `history/`、設計判断は `adr/`）。
 
+## 2026-07-06（管理機能の権限モデル基盤・A2 の前提、ADR-0006）
+
+- **利用者権限モデルを実装**（ADR-0006）。OIDC scope（claim 制御）とは別軸の「利用者権限
+  （permission code）」を新設。マイグレーション `0003_permissions_and_user_permissions`
+  （`permissions` マスタ＋`user_permissions` 多対多）と seed `0004_seed_admin_permission`
+  （`idp.admin` の登録と初期管理者への冪等付与）を追加。
+- ドメインに値オブジェクト `PermissionCode` と `UserPermissionRepository`（DIP 境界。参照/付与/剥奪）、
+  Infrastructure に sqlx 実装、Application に `AdminAccessService`（SSO セッション→利用者解決→権限突合。
+  検証は Application 層で完結し Presentation には可否のみ返す）、Presentation に `RequirePerms<IdpAdmin>`
+  extractor を追加。保護の疎通確認用に内部エンドポイント `GET /admin/whoami`（`idp.admin` 必須）を追加。
+- 監査イベント種別 `user_permission.granted` / `.revoked` を追加（設計仕様 §7）。
+
 ## 2026-07-05（インフラ整備 T9〜T13・D2）
 
 - **T9: IdP アプリのコンテナ化と Compose 統合**。マルチステージ `Dockerfile`（`rust:slim` ビルド →

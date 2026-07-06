@@ -19,6 +19,9 @@ pub enum AuditEventType {
     SsoSessionResumed,
     SsoSessionExpired,
     SsoSessionTerminated,
+    /// 管理者による利用者権限の付与／剥奪（ADR-0006、設計仕様 §7）。
+    UserPermissionGranted,
+    UserPermissionRevoked,
 }
 
 impl AuditEventType {
@@ -36,6 +39,8 @@ impl AuditEventType {
             Self::SsoSessionResumed => "sso_session.resumed",
             Self::SsoSessionExpired => "sso_session.expired",
             Self::SsoSessionTerminated => "sso_session.terminated",
+            Self::UserPermissionGranted => "user_permission.granted",
+            Self::UserPermissionRevoked => "user_permission.revoked",
         }
     }
 }

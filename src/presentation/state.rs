@@ -3,6 +3,7 @@
 //! [`AppState::build`] がユースケースの組み立て（依存注入）を一手に担う。
 //! バイナリ（`lib.rs::run`）と統合テストの双方から同じ組み立てを使う。
 
+use crate::application::admin_access::AdminAccessService;
 use crate::application::audit::AuditService;
 use crate::application::authorize::AuthorizeService;
 use crate::application::code_issuance::CodeIssuanceService;
@@ -23,6 +24,7 @@ use crate::infrastructure::repositories::client::SqlxClientRepository;
 use crate::infrastructure::repositories::signing_key::SqlxSigningKeyRepository;
 use crate::infrastructure::repositories::sso_session::SqlxSsoSessionRepository;
 use crate::infrastructure::repositories::user::SqlxUserRepository;
+use crate::infrastructure::repositories::user_permission::SqlxUserPermissionRepository;
 use axum::extract::FromRef;
 use std::sync::Arc;
 
@@ -40,6 +42,7 @@ pub struct AppState {
     pub token: Arc<TokenService>,
     pub userinfo: Arc<UserInfoService>,
     pub keys: Arc<KeyService>,
+    pub admin_access: Arc<AdminAccessService>,
 }
 
 impl AppState {
@@ -51,6 +54,7 @@ impl AppState {
         let sso_sessions = Arc::new(SqlxSsoSessionRepository::new(pool.clone()));
         let codes = Arc::new(SqlxAuthorizationCodeRepository::new(pool.clone()));
         let signing_keys = Arc::new(SqlxSigningKeyRepository::new(pool.clone()));
+        let user_permissions = Arc::new(SqlxUserPermissionRepository::new(pool.clone()));
         let audit_sink = Arc::new(SqlxAuditLogSink::new(pool.clone()));
         let hasher = Arc::new(Argon2PasswordHasher::new());
         let rate_limiter = Arc::new(InMemoryLoginRateLimiter::new(
@@ -90,7 +94,7 @@ impl AppState {
         let login = Arc::new(LoginService::new(
             users.clone(),
             auth_sessions,
-            sso_sessions,
+            sso_sessions.clone(),
             code_issuance,
             hasher.clone(),
             rate_limiter,
@@ -113,10 +117,16 @@ impl AppState {
         ));
         let userinfo = Arc::new(UserInfoService::new(
             signing_keys,
-            users,
-            clock,
+            users.clone(),
+            clock.clone(),
             config.issuer().to_string(),
             config.clock_skew(),
+        ));
+        let admin_access = Arc::new(AdminAccessService::new(
+            sso_sessions,
+            users,
+            user_permissions,
+            clock,
         ));
 
         Self {
@@ -128,6 +138,7 @@ impl AppState {
             token,
             userinfo,
             keys,
+            admin_access,
         }
     }
 }

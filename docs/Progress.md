@@ -23,7 +23,7 @@ code 再利用検知・SSO 復元時の auth_time 継承・監査ログ二重出
 | 優先 | # | 概要 | 状態 | 影響度 | 工数 |
 |---|---|---|---|---|---|
 | 1 | A1 | クライアント（RP）登録 API・画面（管理者用）: CRUD・資格情報発行・redirect URI 管理 | ⬜未着手 | 大 | 大 |
-| 2 | A2 | 管理コンソール基盤: 管理者認証・画面レイアウト・権限（scope ベース）・操作監査 | ⬜未着手 | 大 | 中 |
+| 2 | A2 | 管理コンソール基盤: 管理者認証・画面レイアウト・権限（scope ベース）・操作監査 | 🚧進行中 | 大 | 中 |
 | 3 | A3 | 状況確認画面: ログイン/監査ログ一覧（エラー絞り込み）、クライアント状況一覧（最終利用時刻等） | ⬜未着手 | 中 | 中 |
 | 4 | K1 | 署名鍵管理: 複数鍵での署名（世代重複）・JWKS 公開・管理画面（一覧/生成/退役）・EC(ES256) 対応 | ⬜未着手 | 大 | 中 |
 | 5 | K2 | 署名鍵の自動ローテーション: `not_after` ベースのスケジュール実行・ACTIVE/RETIRED 自動管理 | ⬜未着手 | 中 | 中 |
@@ -50,10 +50,15 @@ code 再利用検知・SSO 復元時の auth_time 継承・監査ログ二重出
 - **A2 — 管理コンソール基盤**（権限モデルは **`docs/adr/0006-admin-permission-model.md`** で確定）:
   - アクセスは **ロールではなく権限コード**（例 `idp.admin`）で制御（CLAUDE.md「権限管理」）。
     OIDC scope（openid/profile/email）とは別軸の「利用者権限」を新設する（ADR-0006）。
-  - 実装項目: `permissions` / `user_permissions` マイグレーション + seed（`admin@example.com` へ `idp.admin`
-    付与）+ `UserPermissionRepository`（DIP 境界）+ `RequirePerms("idp.admin")` extractor。
-  - サーバレンダリング（既存ログイン画面と同じ axum + fluent i18n）。権限付与/剥奪を含む全操作を
-    `audit_log` に記録（`user_permission.granted`/`.revoked` を §7 へ追記）。
+  - **権限モデル基盤は実装済み**（2026-07-06、`CHANGELOG.md`）: `permissions` / `user_permissions`
+    マイグレーション（0003）+ seed（0004。`admin@example.com` へ `idp.admin` 付与）+ 値オブジェクト
+    `PermissionCode` + `UserPermissionRepository`（DIP 境界。参照/付与/剥奪）+ Application の
+    `AdminAccessService`（SSO→利用者→権限突合）+ `RequirePerms<IdpAdmin>` extractor +
+    内部疎通用 `GET /admin/whoami`。監査種別 `user_permission.granted`/`.revoked` を §7 に追記済み。
+  - **残作業**: サーバレンダリングの管理コンソール画面（既存ログイン画面と同じ axum + fluent i18n）と
+    画面レイアウト、権限付与/剥奪 UI、および付与/剥奪操作の `audit_log` 記録（`AdminAccessService` に
+    grant/revoke ユースケースを足して `AuditEventType::UserPermission*` を出力する結線）。
+    未ログイン時のログイン誘導（現状 extractor は 401 を返す）も画面実装時に整える。
 
 - **A3 — 状況確認画面**:
   - **ログイン/監査ログ一覧**: `audit_log` を `event_type` / `result` / 期間 / `client_id` で絞り込み表示
@@ -104,7 +109,9 @@ code 再利用検知・SSO 復元時の auth_time 継承・監査ログ二重出
 
 > 依存関係:
 > - A2（管理コンソール基盤＋権限モデル）は A1・A3・K1 の画面が前提とする。権限モデルは
->   `docs/adr/0006-admin-permission-model.md`（Accepted）で確定済み（未着手）。
+>   `docs/adr/0006-admin-permission-model.md`（Accepted）で確定し、**基盤は実装済み**
+>   （`RequirePerms<IdpAdmin>` extractor まで。残りは管理画面 UI）。A1・A3・K1 の管理画面は
+>   この extractor で保護して実装する。
 > - F2 は A1（client の grant_types 管理）と親和。F4・F5 はセッション/トークン失効基盤を共有。
 > - S1 は他タスクと独立に着手可能（早期着手も可）。
 > 各タスクは着手時に `docs/history/` への記録要否（規模が大きく背景まで追う場合のみ）を判断する。

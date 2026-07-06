@@ -88,3 +88,19 @@ pub trait SigningKeyRepository: Send + Sync {
 pub trait AuditLogSink: Send + Sync {
     async fn record(&self, event: &AuditEvent) -> Result<()>;
 }
+
+/// 利用者が保有する権限コード（ADR-0006）の参照・付与・剥奪（DIP 境界）。
+///
+/// OIDC scope（`ClientRepository` 側の関心）とは別軸。保護ユースケースは本トレイト越しに
+/// 「利用者が必要権限を保有するか」を判定する。付与/剥奪は管理コンソール（A2）が用いる。
+#[async_trait]
+pub trait UserPermissionRepository: Send + Sync {
+    /// 利用者が保有する権限コード一覧を返す（順序は不定）。
+    async fn list_codes_for_user(&self, user_id: Uuid) -> Result<Vec<String>>;
+    /// 利用者が指定の権限コードを保有するか。
+    async fn has_permission(&self, user_id: Uuid, code: &str) -> Result<bool>;
+    /// 権限を付与する（冪等: 既存付与は何もしない）。`code` は `permissions` マスタに存在すること。
+    async fn grant(&self, user_id: Uuid, code: &str, granted_at: DateTime<Utc>) -> Result<()>;
+    /// 権限を剥奪する（不存在でもエラーにしない）。
+    async fn revoke(&self, user_id: Uuid, code: &str) -> Result<()>;
+}

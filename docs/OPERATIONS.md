@@ -47,6 +47,27 @@ confidential client の場合は `client_type='confidential'`、
 `token_endpoint_auth_method='client_secret_basic'` とし、`client_secret_hash` に
 argon2 ハッシュ（アプリと同じ `Argon2PasswordHasher` で生成した PHC 文字列）を設定する。
 
+## 利用者に管理権限（idp.admin）を付与／剥奪したいとき
+
+管理コンソールの権限付与 UI は未実装のため、SQL で `user_permissions` を操作する（権限モデルは
+ADR-0006）。付与できる権限コードは `permissions` マスタに存在するものに限る（初期値は `idp.admin`）。
+初期管理者（`admin@example.com`）には seed で `idp.admin` が付与済み。
+
+```sql
+-- 付与（対象ユーザーの id は users テーブルから引く。email で照合する例）
+INSERT INTO user_permissions (user_id, permission_code)
+SELECT id, 'idp.admin' FROM users WHERE email = 'someone@example.com'
+ON DUPLICATE KEY UPDATE user_id = user_id;
+
+-- 剥奪
+DELETE up FROM user_permissions up
+  JOIN users u ON u.id = up.user_id
+  WHERE u.email = 'someone@example.com' AND up.permission_code = 'idp.admin';
+```
+
+権限を保有する利用者は、有効な SSO セッション（一度ログイン済み）で `GET /admin/whoami` に
+アクセスでき、自身の `user_id` が返る（保護の疎通確認用）。
+
 ## 環境変数を設定したいとき
 
 | 変数 | 既定値 | 用途 |
