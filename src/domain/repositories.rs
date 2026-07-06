@@ -37,6 +37,13 @@ pub trait UserRepository: Send + Sync {
 #[async_trait]
 pub trait ClientRepository: Send + Sync {
     async fn find_by_client_id(&self, client_id: &str) -> Result<Option<Client>>;
+    /// クライアント（RP）を新規登録する（管理 API、設計仕様 §9.3）。`client_id` 重複は `Conflict`。
+    async fn create(&self, client: &Client) -> Result<()>;
+    /// 登録済みクライアントを新しい順に一覧する（管理画面 A3・A1）。
+    async fn list(&self) -> Result<Vec<Client>>;
+    /// 可変項目（app_name / redirect_uris / scopes / status / secret_hash 等）を更新する。
+    /// 主キー `id` で対象を特定する。対象が無い場合は `NotFound`。
+    async fn update(&self, client: &Client) -> Result<()>;
 }
 
 #[async_trait]

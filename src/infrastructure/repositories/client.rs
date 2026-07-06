@@ -69,6 +69,12 @@ fn map_row(row: &MySqlRow) -> Result<Client> {
     })
 }
 
+// JSON カラムへ格納する文字列配列をシリアライズする。
+fn to_json(values: &[String], column: &str) -> Result<String> {
+    serde_json::to_string(values)
+        .map_err(|e| DomainError::Repository(format!("failed to serialize `{column}`: {e}")))
+}
+
 #[async_trait]
 impl ClientRepository for SqlxClientRepository {
     async fn find_by_client_id(&self, client_id: &str) -> Result<Option<Client>> {
@@ -79,5 +85,73 @@ impl ClientRepository for SqlxClientRepository {
             .await
             .map_err(repo_err)?;
         row.as_ref().map(map_row).transpose()
+    }
+
+    async fn create(&self, client: &Client) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO clients \
+             (id, client_id, client_secret_hash, client_type, client_status, app_name, \
+              redirect_uris, grant_types, response_types, scopes, \
+              token_endpoint_auth_method, require_pkce) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(client.id.to_string())
+        .bind(&client.client_id)
+        .bind(&client.client_secret_hash)
+        .bind(client.client_type.as_str())
+        .bind(client.client_status.as_str())
+        .bind(&client.app_name)
+        .bind(to_json(&client.redirect_uris, "redirect_uris")?)
+        .bind(to_json(&client.grant_types, "grant_types")?)
+        .bind(to_json(&client.response_types, "response_types")?)
+        .bind(to_json(&client.scopes, "scopes")?)
+        .bind(client.token_endpoint_auth_method.as_str())
+        .bind(client.require_pkce)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| match &e {
+            sqlx::Error::Database(db) if db.is_unique_violation() => {
+                DomainError::Conflict("client_id already exists".to_string())
+            }
+            _ => DomainError::Repository(e.to_string()),
+        })?;
+        Ok(())
+    }
+
+    async fn list(&self) -> Result<Vec<Client>> {
+        let sql = format!("SELECT {SELECT_COLUMNS} FROM clients ORDER BY created_at DESC");
+        let rows = sqlx::query(&sql)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(repo_err)?;
+        rows.iter().map(map_row).collect()
+    }
+
+    async fn update(&self, client: &Client) -> Result<()> {
+        // 対象の存在は呼び出し側（load-then-update）が保証する。updated_at は
+        // ON UPDATE CURRENT_TIMESTAMP(6) に委ねる。値無変更時に MySQL が返す rows_affected=0 は
+        // 「不存在」と区別できないため、rows_affected では存在判定しない。
+        sqlx::query(
+            "UPDATE clients SET \
+             client_secret_hash = ?, client_type = ?, client_status = ?, app_name = ?, \
+             redirect_uris = ?, grant_types = ?, response_types = ?, scopes = ?, \
+             token_endpoint_auth_method = ?, require_pkce = ? \
+             WHERE id = ?",
+        )
+        .bind(&client.client_secret_hash)
+        .bind(client.client_type.as_str())
+        .bind(client.client_status.as_str())
+        .bind(&client.app_name)
+        .bind(to_json(&client.redirect_uris, "redirect_uris")?)
+        .bind(to_json(&client.grant_types, "grant_types")?)
+        .bind(to_json(&client.response_types, "response_types")?)
+        .bind(to_json(&client.scopes, "scopes")?)
+        .bind(client.token_endpoint_auth_method.as_str())
+        .bind(client.require_pkce)
+        .bind(client.id.to_string())
+        .execute(&self.pool)
+        .await
+        .map_err(repo_err)?;
+        Ok(())
     }
 }

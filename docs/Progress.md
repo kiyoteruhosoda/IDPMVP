@@ -22,7 +22,7 @@ code 再利用検知・SSO 復元時の auth_time 継承・監査ログ二重出
 
 | 優先 | # | 概要 | 状態 | 影響度 | 工数 |
 |---|---|---|---|---|---|
-| 1 | A1 | クライアント（RP）登録 API・画面（管理者用）: CRUD・資格情報発行・redirect URI 管理 | ⬜未着手 | 大 | 大 |
+| 1 | A1 | クライアント（RP）登録 API・画面（管理者用）: CRUD・資格情報発行・redirect URI 管理 | 🚧進行中 | 大 | 大 |
 | 2 | A2 | 管理コンソール基盤: 管理者認証・画面レイアウト・権限（scope ベース）・操作監査 | 🚧進行中 | 大 | 中 |
 | 3 | A3 | 状況確認画面: ログイン/監査ログ一覧（エラー絞り込み）、クライアント状況一覧（最終利用時刻等） | ⬜未着手 | 中 | 中 |
 | 4 | K1 | 署名鍵管理: 複数鍵での署名（世代重複）・JWKS 公開・管理画面（一覧/生成/退役）・EC(ES256) 対応 | ⬜未着手 | 大 | 中 |
@@ -37,15 +37,19 @@ code 再利用検知・SSO 復元時の auth_time 継承・監査ログ二重出
 
 ### 管理機能（A1〜A3）
 
-- **A1 — クライアント（RP）登録**（設計仕様 §9.3。現状は SQL 手動＝`docs/OPERATIONS.md`）:
-  - アプリ登録 API/画面（管理者用）。`client_id` は自動採番、`client_secret` は **初回のみ平文表示**し
-    DB には argon2 ハッシュのみ保存（既存 `Argon2PasswordHasher` を流用）。secret 再発行・無効化に対応。
-  - `client_type`（public/confidential）に応じて `token_endpoint_auth_method` を設定
-    （public=`none`、confidential=`client_secret_basic`。将来 `private_key_jwt`）。
-  - **redirect URI 管理**: 完全一致・複数登録（データモデルは `redirect_uris` JSON 配列で対応済み。
-    §2.3 の検証はアプリ層で実装済み）。フラグメント/ワイルドカード禁止のバリデーションを画面/APIに付与。
-  - scope 管理（`Clients.scopes`。要求 scope はこの部分集合）。API は utoipa で OpenAPI 自動生成。
+- **A1 — クライアント（RP）登録**（設計仕様 §9.3）:
+  - **登録 API は実装済み**（2026-07-06、`CHANGELOG.md`）: `/admin/clients` の CRUD＋secret 再発行
+    （`RequirePerms<IdpAdmin>` で保護）。`client_id` 自動採番、`client_secret` は confidential の
+    登録・再発行時に**その応答でのみ**平文表示し DB は argon2 ハッシュのみ（`Argon2PasswordHasher` 流用）。
+    `client_type` に応じ `token_endpoint_auth_method` を設定（public=`none`、confidential=
+    `client_secret_basic`）。redirect URI は完全一致・複数登録・フラグメント/ワイルドカード禁止を
+    アプリ層で検証。scope は `openid` を含む OIDC scope に限定。全変更操作を `audit_log` へ記録
+    （`client.registered`/`.updated`/`.secret_rotated`）。utoipa で OpenAPI 自動生成（tag=admin）。
+    統合テスト `tests/admin_clients.rs`（401/403/400/CRUD/secret 再発行）を追加。
+  - **残作業**: 管理者用の登録/一覧/編集**画面**（A2 の管理コンソール基盤の上にサーバレンダリングで実装）、
+    クライアントの無効化（`PATCH` の `client_status=DISABLED` で対応済みだが画面導線が未整備）。
   - **動的クライアント登録（RFC 7591）は対象外**（将来検討。`docs/OIDC_INPUT.md` §8）。
+  - **将来**: `token_endpoint_auth_method` の `private_key_jwt` 対応。
 
 - **A2 — 管理コンソール基盤**（権限モデルは **`docs/adr/0006-admin-permission-model.md`** で確定）:
   - アクセスは **ロールではなく権限コード**（例 `idp.admin`）で制御（CLAUDE.md「権限管理」）。

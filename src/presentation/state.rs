@@ -6,6 +6,7 @@
 use crate::application::admin_access::AdminAccessService;
 use crate::application::audit::AuditService;
 use crate::application::authorize::AuthorizeService;
+use crate::application::client_management::ClientManagementService;
 use crate::application::code_issuance::CodeIssuanceService;
 use crate::application::key_service::KeyService;
 use crate::application::login::LoginService;
@@ -43,6 +44,7 @@ pub struct AppState {
     pub userinfo: Arc<UserInfoService>,
     pub keys: Arc<KeyService>,
     pub admin_access: Arc<AdminAccessService>,
+    pub clients_admin: Arc<ClientManagementService>,
 }
 
 impl AppState {
@@ -103,6 +105,12 @@ impl AppState {
             config.sso_idle_ttl(),
             config.sso_absolute_ttl(),
         ));
+        let clients_admin = Arc::new(ClientManagementService::new(
+            clients.clone(),
+            hasher.clone(),
+            audit.clone(),
+            clock.clone(),
+        ));
         let token = Arc::new(TokenService::new(
             clients,
             users.clone(),
@@ -139,6 +147,7 @@ impl AppState {
             userinfo,
             keys,
             admin_access,
+            clients_admin,
         }
     }
 }

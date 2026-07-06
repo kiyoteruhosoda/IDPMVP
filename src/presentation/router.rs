@@ -2,7 +2,7 @@
 
 use crate::presentation::correlation;
 use crate::presentation::handlers::{
-    admin, authorize, discovery, health, login, register, token, userinfo,
+    admin, admin_clients, authorize, discovery, health, login, register, token, userinfo,
 };
 use crate::presentation::openapi::ApiDoc;
 use crate::presentation::state::AppState;
@@ -23,6 +23,19 @@ pub fn build(state: AppState) -> Router {
         .route("/userinfo", get(userinfo::userinfo))
         // 管理コンソール（A2 基盤）。idp.admin 権限が必要（RequirePerms<IdpAdmin>）。内部用。
         .route("/admin/whoami", get(admin::whoami))
+        // クライアント（RP）登録・管理 API（A1、設計仕様 §9.3）。idp.admin 必須。
+        .route(
+            "/admin/clients",
+            post(admin_clients::create_client).get(admin_clients::list_clients),
+        )
+        .route(
+            "/admin/clients/{client_id}",
+            get(admin_clients::get_client).patch(admin_clients::update_client),
+        )
+        .route(
+            "/admin/clients/{client_id}/secret",
+            post(admin_clients::rotate_client_secret),
+        )
         .route(
             "/.well-known/openid-configuration",
             get(discovery::openid_configuration),

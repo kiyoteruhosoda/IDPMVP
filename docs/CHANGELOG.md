@@ -2,6 +2,21 @@
 
 完了した重要な変更の要約（詳しい経緯は `history/`、設計判断は `adr/`）。
 
+## 2026-07-06（A1: クライアント（RP）登録・管理 API）
+
+- **クライアント管理 API を実装**（設計仕様 §9.3、Progress A1）。`/admin/clients` の CRUD＋シークレット
+  再発行（`RequirePerms<IdpAdmin>` で保護）。`client_id` 自動採番、`client_secret` は confidential の
+  登録・再発行時に**その応答でのみ**平文表示し DB は argon2 ハッシュのみ。`client_type` に応じ
+  `token_endpoint_auth_method`（public=`none`／confidential=`client_secret_basic`）と PKCE を設定。
+  redirect_uri は完全一致・複数登録・フラグメント／ワイルドカード禁止をアプリ層で検証。scope は
+  `openid` を含む OIDC scope に限定。
+- ドメインに `ClientRepository::{create,list,update}` を追加し sqlx 実装、Application に
+  `ClientManagementService`（検証・secret 発行・監査記録）、Presentation に `admin_clients` ハンドラ群と
+  DTO を追加。`ApiError::NotFound`（404）を追加。監査種別 `client.registered`/`.updated`/
+  `.secret_rotated` を追加（§7）。OpenAPI に tag `admin` で自動掲載。
+- 単体テスト（redirect_uri／scope／app_name 検証）と統合テスト `tests/admin_clients.rs`
+  （401/403/400/CRUD/secret 再発行、権限の無い利用者の 403）を追加。
+
 ## 2026-07-06（管理機能の権限モデル基盤・A2 の前提、ADR-0006）
 
 - **利用者権限モデルを実装**（ADR-0006）。OIDC scope（claim 制御）とは別軸の「利用者権限

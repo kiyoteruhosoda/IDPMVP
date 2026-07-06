@@ -710,6 +710,10 @@ sso_session.terminated   # 将来のLogout用に予約
 
 user_permission.granted  # 管理者による利用者権限の付与（ADR-0006）
 user_permission.revoked  # 管理者による利用者権限の剥奪（ADR-0006）
+
+client.registered        # 管理者によるクライアント（RP）登録（§9.3）
+client.updated           # 管理者によるクライアント更新
+client.secret_rotated    # 管理者による client_secret 再発行
 ```
 
 #### ログ項目
