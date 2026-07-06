@@ -84,3 +84,106 @@ openssl rand -base64 32   # これを KEY_ENCRYPTION_KEY に設定する
 
 - Liveness: `GET /healthz`
 - Readiness: `GET /readyz`（DB 到達と組み合わせてスキーマ version も起動時に照合済み）
+
+## 初めて環境を初期化したいとき（db + web）
+
+`scripts/init.sh` を実行する。冪等（既存 `.env` は上書きしない）。
+
+```sh
+./scripts/init.sh
+```
+
+内容: 秘密情報（DB パスワード・`KEY_ENCRYPTION_KEY`）を乱数生成して `.env` を作成 → MariaDB 起動 →
+マイグレーション（DDL + マスタデータ）適用 → web をビルド・起動 → `/healthz` 待機。
+
+前提: `docker`（Compose v2）と `openssl`。マイグレーションはコンテナ側の sqlx-cli で適用するため
+ホストへの sqlx-cli 導入は不要。
+
+## デプロイしたいとき（同一ホスト Compose）
+
+`scripts/deploy.sh` を実行する（事前に `init.sh` 実行済み ＝ `.env` がある前提）。
+
+```sh
+./scripts/deploy.sh
+```
+
+内容: イメージビルド（web / migrate）→ DDL + マスタデータ適用（専用ジョブで単独実行）→
+`docker compose up -d web` → `/readyz` で起動確認。
+
+## マイグレーションだけを適用したいとき（Compose）
+
+DDL・マスタデータの適用は常駐させない専用ジョブ（`migrate` サービス）で単独実行する。
+
+```sh
+docker compose run --rm migrate            # sqlx migrate run（DATABASE_URL は .env から解決）
+```
+
+ホストに sqlx-cli がある場合は従来どおり `DATABASE_URL=... sqlx migrate run` でもよい。
+
+## ロールバックしたいとき
+
+- アプリ: 直前のイメージへ戻す（タグ運用なら該当タグで `docker compose up -d web`、
+  未タグ運用なら 1 つ前のコミットを checkout して `./scripts/deploy.sh`）。
+- スキーマ: migration は expand/contract 前提のため、直前バージョンのアプリは新スキーマ上でも動く。
+  DDL 自体を戻す必要がある場合のみ次を実行する（`.down.sql` を適用）。
+
+```sh
+docker compose run --rm --entrypoint sqlx migrate migrate revert --source /migrate/migrations
+```
+
+## 初期管理ユーザーのパスワードを変更したいとき
+
+初期管理ユーザー `admin@example.com` は「変更前提のデフォルト値」として seed される
+（既定パスワード `ChangeMe!123`）。本番では初回ログイン後すぐに変更する。
+
+MVP には管理 API・パスワード変更フローが無いため、`/auth/register` で新しい管理ユーザーを作成し
+（パスワードはアプリが argon2 でハッシュ化）、seed 管理ユーザーを無効化する運用とする。
+
+```sh
+# 1. 新しい管理ユーザーを登録（アプリがパスワードをハッシュ化）
+curl -fsS -X POST http://localhost:8080/auth/register \
+  -H 'content-type: application/json' \
+  -d '{"email":"admin@your-domain.example","preferred_username":"admin2","password":"<強いパスワード>"}'
+```
+
+```sql
+-- 2. seed 管理ユーザーを無効化する（削除ではなく DISABLED にして監査を残す）
+UPDATE users SET status = 'DISABLED' WHERE email = 'admin@example.com';
+```
+
+## 秘密鍵の暗号化キー（KEY_ENCRYPTION_KEY）をローテーションしたいとき
+
+`KEY_ENCRYPTION_KEY` は `signing_keys.private_key_encrypted` の暗号化に使う。値を変えると既存の
+暗号化秘密鍵を復号できなくなるため、単純な差し替えは不可。MVP では次の手順で入れ替える。
+
+```sql
+-- 1. 現行 ACTIVE 鍵を RETIRED にする（JWKS には残り、既存トークンの検証は継続可能）
+UPDATE signing_keys SET status = 'RETIRED' WHERE status = 'ACTIVE';
+```
+
+```sh
+# 2. .env の KEY_ENCRYPTION_KEY を新しい値へ更新して web を再起動する。
+#    ACTIVE 鍵が無いため起動時ブートストラップが新鍵を新キーで暗号化して生成する。
+openssl rand -base64 32     # 新しい KEY_ENCRYPTION_KEY
+docker compose up -d web
+```
+
+RETIRED 鍵は新キーでは復号できないが、公開鍵（`public_key`）は平文のため JWKS 掲載・検証は継続できる。
+`not_after` を過ぎたら DB から削除してよい。
+
+## バックアップ／リストアしたいとき
+
+MariaDB のデータボリューム（`mariadb_data`）を論理ダンプで退避する。
+
+```sh
+# バックアップ（.env の root パスワードを使用）
+docker compose exec mariadb sh -c \
+  'exec mariadb-dump -uroot -p"$MARIADB_ROOT_PASSWORD" --single-transaction idp' > backup.sql
+
+# リストア
+docker compose exec -T mariadb sh -c \
+  'exec mariadb -uroot -p"$MARIADB_ROOT_PASSWORD" idp' < backup.sql
+```
+
+`.env`（秘密情報一式）と `backup.sql` は別々に安全な場所へ保管する。`.env` を失うと
+`KEY_ENCRYPTION_KEY` が失われ、暗号化済み署名秘密鍵を復号できなくなる点に注意する。

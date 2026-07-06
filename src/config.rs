@@ -127,8 +127,8 @@ fn normalize_issuer(raw: String) -> String {
 
 /// `KEY_ENCRYPTION_KEY`（base64、32 バイト）を読み込む。未設定なら開発用デフォルトを使う。
 fn load_key_encryption_key() -> anyhow::Result<([u8; 32], bool)> {
-    match env::var("KEY_ENCRYPTION_KEY") {
-        Ok(v) => {
+    match env_lookup("KEY_ENCRYPTION_KEY") {
+        Some(v) => {
             let bytes = STANDARD
                 .decode(v.trim())
                 .map_err(|e| anyhow::anyhow!("KEY_ENCRYPTION_KEY must be base64: {e}"))?;
@@ -140,7 +140,7 @@ fn load_key_encryption_key() -> anyhow::Result<([u8; 32], bool)> {
             })?;
             Ok((arr, false))
         }
-        Err(_) => Ok((*DEV_KEY_ENCRYPTION_KEY, true)),
+        None => Ok((*DEV_KEY_ENCRYPTION_KEY, true)),
     }
 }
 
@@ -148,8 +148,19 @@ fn secs(v: u64) -> Duration {
     Duration::from_secs(v)
 }
 
+/// 環境変数を引く。**空文字列は「未設定」として扱う**。
+///
+/// Docker Compose の `${VAR:-}` は未指定でもキーを空文字列で注入するため、空を未設定と
+/// みなさないと数値・bool パースが失敗して起動できなくなる（例: `COOKIE_SECURE=""`）。
+fn env_lookup(key: &str) -> Option<String> {
+    match env::var(key) {
+        Ok(v) if !v.is_empty() => Some(v),
+        _ => None,
+    }
+}
+
 fn env_or(key: &str, default: &str) -> String {
-    env::var(key).unwrap_or_else(|_| default.to_string())
+    env_lookup(key).unwrap_or_else(|| default.to_string())
 }
 
 fn env_parse<T>(key: &str, default: T) -> anyhow::Result<T>
@@ -157,11 +168,11 @@ where
     T: std::str::FromStr,
     T::Err: std::fmt::Display,
 {
-    match env::var(key) {
-        Ok(v) => v
+    match env_lookup(key) {
+        Some(v) => v
             .parse::<T>()
             .map_err(|e| anyhow::anyhow!("invalid value for {key}: {e}")),
-        Err(_) => Ok(default),
+        None => Ok(default),
     }
 }
 
@@ -186,5 +197,16 @@ mod tests {
         // 未設定キーは既定値を返す。
         let v: u64 = env_parse("IDP_TEST_DEFINITELY_UNSET_KEY", 42).unwrap();
         assert_eq!(v, 42);
+    }
+
+    #[test]
+    fn empty_env_var_is_treated_as_unset() {
+        // Compose の `${VAR:-}` 由来の空文字列は「未設定」として既定値へフォールバックする。
+        let key = "IDP_TEST_EMPTY_ENV_VAR";
+        std::env::set_var(key, "");
+        assert_eq!(env_or(key, "fallback"), "fallback");
+        let v: bool = env_parse(key, true).unwrap();
+        assert!(v);
+        std::env::remove_var(key);
     }
 }
