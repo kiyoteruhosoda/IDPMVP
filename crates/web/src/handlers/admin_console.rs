@@ -226,7 +226,7 @@ pub(crate) async fn resolve_admin(
     match state.api.admin_whoami(&correlation.0, &sso).await {
         AdminSession::Authenticated(user_id) => AdminResolution::Ok(user_id),
         AdminSession::Unauthenticated => AdminResolution::Reject(redirect_to_login()),
-        AdminSession::Forbidden => AdminResolution::Reject(forbidden_page(headers)),
+        AdminSession::Forbidden => AdminResolution::Reject(forbidden_response(headers)),
         AdminSession::Error => AdminResolution::Reject(
             (StatusCode::BAD_GATEWAY, Html(String::new())).into_response(),
         ),
@@ -238,8 +238,8 @@ pub(crate) fn redirect_to_login() -> Response {
     found(ADMIN_LOGIN_PATH)
 }
 
-/// 権限不足を伝える最小限の HTML ページ（403）。
-fn forbidden_page(headers: &HeaderMap) -> Response {
+/// 権限不足を伝える最小限の HTML ページ（403）。管理コンソール各画面から再利用する。
+pub(crate) fn forbidden_response(headers: &HeaderMap) -> Response {
     let messages = Messages::new(locale(headers));
     let title = messages.get("admin-forbidden-title");
     let message = messages.get("admin-forbidden-message");

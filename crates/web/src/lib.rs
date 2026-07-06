@@ -7,6 +7,7 @@
 //! ログイン画面（`/login`）と i18n は web へ移設済み（P3-2）。管理コンソール（`/admin/console/*`）の
 //! 移設は後続ステージで行う。
 
+pub mod admin_dto;
 pub mod api_client;
 pub mod config;
 pub mod cookies;
@@ -14,6 +15,7 @@ pub mod correlation;
 pub mod csrf;
 pub mod dto;
 pub mod handlers;
+pub mod html;
 pub mod i18n;
 pub mod router;
 pub mod state;

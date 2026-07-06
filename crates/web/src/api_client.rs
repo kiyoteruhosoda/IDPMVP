@@ -4,11 +4,13 @@
 //! その唯一の出入口。内部認証（`/internal/authenticate*`）はサービス認証トークン（`X-Internal-Auth-Token`）
 //! を付与して呼ぶ。DTO は `idp-contracts` で api と共有し、コンパイル時に契約整合を保証する。
 
+use crate::admin_dto::{ApiErrorBody, ClientCreatedView, ClientSecretView, ClientView};
 use idp_contracts::admin::WhoamiResponse;
 use idp_contracts::auth::{
     InternalAdminAuthenticateRequest, InternalAdminAuthenticateResponse, InternalAuthenticateRequest,
     InternalAuthenticateResponse, InternalLogoutRequest,
 };
+use reqwest::Method;
 
 /// サービス認証トークンのヘッダ名（api 側 `require_service_token` と一致させる）。
 const SERVICE_TOKEN_HEADER: &str = "x-internal-auth-token";
@@ -16,6 +18,22 @@ const SERVICE_TOKEN_HEADER: &str = "x-internal-auth-token";
 const REQUEST_ID_HEADER: &str = "x-request-id";
 /// SSO セッション Cookie 名（api の `cookies::SSO_SESSION_COOKIE` と一致させる）。
 const SSO_SESSION_COOKIE: &str = "sso_session_id";
+
+/// `/admin/*` 呼び出しの失敗を web の画面挙動へ写すためのエラー（ADR-0007 §4）。
+pub enum AdminApiError {
+    /// 未認証・SSO 期限切れ（401）→ ログイン画面へ誘導。
+    Unauthorized,
+    /// 権限不足（403）→ 403 画面。
+    Forbidden,
+    /// 不存在（404）。
+    NotFound,
+    /// バリデーションエラー（400）。メッセージを表示する。
+    Validation(String),
+    /// 競合（409）。メッセージを表示する。
+    Conflict(String),
+    /// ネットワーク/デコード/想定外ステータス。
+    Transport(String),
+}
 
 /// 管理者の SSO Cookie を api の `/admin/*`（`RequirePerms<IdpAdmin>`）へ転送した結果（ADR-0007 §4）。
 pub enum AdminSession {
@@ -121,6 +139,139 @@ impl ApiClient {
                 AdminSession::Error
             }
         }
+    }
+
+    // ── 管理コンソール → JSON 管理 API（`/admin/*`、SSO Cookie 転送）───────────────
+
+    /// クライアント一覧（`GET /admin/clients`）。
+    pub async fn list_clients(
+        &self,
+        correlation_id: &str,
+        sso: &str,
+    ) -> Result<Vec<ClientView>, AdminApiError> {
+        self.admin_send(Method::GET, "/admin/clients", correlation_id, sso, None)
+            .await
+    }
+
+    /// 単一クライアント（`GET /admin/clients/{id}`）。
+    pub async fn get_client(
+        &self,
+        correlation_id: &str,
+        sso: &str,
+        client_id: &str,
+    ) -> Result<ClientView, AdminApiError> {
+        self.admin_send(
+            Method::GET,
+            &format!("/admin/clients/{client_id}"),
+            correlation_id,
+            sso,
+            None,
+        )
+        .await
+    }
+
+    /// クライアント作成（`POST /admin/clients`）。
+    pub async fn create_client(
+        &self,
+        correlation_id: &str,
+        sso: &str,
+        body: serde_json::Value,
+    ) -> Result<ClientCreatedView, AdminApiError> {
+        self.admin_send(
+            Method::POST,
+            "/admin/clients",
+            correlation_id,
+            sso,
+            Some(body),
+        )
+        .await
+    }
+
+    /// クライアント部分更新（`PATCH /admin/clients/{id}`）。
+    pub async fn update_client(
+        &self,
+        correlation_id: &str,
+        sso: &str,
+        client_id: &str,
+        body: serde_json::Value,
+    ) -> Result<ClientView, AdminApiError> {
+        self.admin_send(
+            Method::PATCH,
+            &format!("/admin/clients/{client_id}"),
+            correlation_id,
+            sso,
+            Some(body),
+        )
+        .await
+    }
+
+    /// secret 再発行（`POST /admin/clients/{id}/secret`）。
+    pub async fn rotate_client_secret(
+        &self,
+        correlation_id: &str,
+        sso: &str,
+        client_id: &str,
+    ) -> Result<ClientSecretView, AdminApiError> {
+        self.admin_send(
+            Method::POST,
+            &format!("/admin/clients/{client_id}/secret"),
+            correlation_id,
+            sso,
+            None,
+        )
+        .await
+    }
+
+    /// `/admin/*`（`RequirePerms<IdpAdmin>`）への共通呼び出し。管理者の SSO Cookie と correlation_id を
+    /// 転送し、api のステータスを web の [`AdminApiError`] へ写す。成功時は本文を `T` へデコードする。
+    async fn admin_send<T>(
+        &self,
+        method: Method,
+        path: &str,
+        correlation_id: &str,
+        sso: &str,
+        body: Option<serde_json::Value>,
+    ) -> Result<T, AdminApiError>
+    where
+        T: serde::de::DeserializeOwned,
+    {
+        let mut req = self
+            .http
+            .request(method, format!("{}{}", self.base_url, path))
+            .header(REQUEST_ID_HEADER, correlation_id)
+            .header(
+                reqwest::header::COOKIE,
+                format!("{SSO_SESSION_COOKIE}={sso}"),
+            );
+        if let Some(json) = body {
+            req = req.json(&json);
+        }
+        let response = req
+            .send()
+            .await
+            .map_err(|e| AdminApiError::Transport(e.to_string()))?;
+
+        let status = response.status();
+        if status.is_success() {
+            return response
+                .json::<T>()
+                .await
+                .map_err(|e| AdminApiError::Transport(format!("decode {path}: {e}")));
+        }
+        // 失敗時はエラー本文から message を取り出す（400/409 の表示用）。
+        let message = response
+            .json::<ApiErrorBody>()
+            .await
+            .map(|b| b.message)
+            .unwrap_or_default();
+        Err(match status {
+            reqwest::StatusCode::UNAUTHORIZED => AdminApiError::Unauthorized,
+            reqwest::StatusCode::FORBIDDEN => AdminApiError::Forbidden,
+            reqwest::StatusCode::NOT_FOUND => AdminApiError::NotFound,
+            reqwest::StatusCode::BAD_REQUEST => AdminApiError::Validation(message),
+            reqwest::StatusCode::CONFLICT => AdminApiError::Conflict(message),
+            other => AdminApiError::Transport(format!("unexpected status {other}")),
+        })
     }
 
     /// api への到達性を確認する（`GET /healthz`）。web の readiness で使う。
