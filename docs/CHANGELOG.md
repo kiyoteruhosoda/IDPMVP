@@ -2,6 +2,94 @@
 
 完了した重要な変更の要約（詳しい経緯は `history/`、設計判断は `adr/`）。
 
+## 2026-07-06（C1 完了: API/Web サービス分割 — P5 テスト再編・E2E）
+
+- **C1（コンテナ分離）完了**。ADR-0007 の理想形（真のサービス分割）を P0〜P5 まで実装。api（OIDC
+  protocol・JSON 管理 API・内部 API・DB 唯一の所有者）と web（全 HTML 画面・API クライアント・DB 非依存）
+  を cargo workspace（`core`/`contracts`/`api`/`web`）＋別コンテナ＋単一オリジンのリバースプロキシで分離。
+- **P5 テスト再編**。api 単体統合テスト（`oidc_flow` は `/internal/authenticate` 駆動）＋web→api の自動
+  E2E ハーネス `scripts/e2e.sh` を新設。e2e はapi・webを別プロセスで起動し、`/authorize`→web `/login`→
+  `/token` の OIDC フローと管理コンソール（ログイン・クライアント作成・権限付与・状況/監査）を
+  ブラウザ相当の HTTP で通す（実 MariaDB で全項目パスを確認）。
+- 外部から見た OIDC 契約（`docs/OIDC_INPUT.md`）は分割の前後で不変。
+
+## 2026-07-06（C1 P3-4・P4 完了: api の HTML 撤去とサービス分離 Compose）
+
+- **api から HTML を撤去**（P3-4）。ログイン画面・管理コンソール 4 画面・i18n・html・`AdminHtmlSession`
+  を削除し、api は OIDC protocol・JSON 管理 API・内部 API のみに。JSON 401/403 を返す
+  `RequirePerms<IdpAdmin>` は残す。`/login`・`/admin/console/*` ルートを削除。core の未使用
+  `admin_csrf_token` を削除。api 統合テストを再編（`oidc_flow` は `/internal/authenticate` 駆動へ、
+  HTML 画面テストは web へ移動）。全テスト緑（fresh MariaDB）。
+- **api / web / proxy の Compose 分離**（P4、ADR-0007 §2）。Dockerfile を 1 ワークスペース→2 バイナリ
+  （`idp`＝api、`idp-web`＝web）＋2 実行ステージ（`runtime-api`・`runtime-web`）に。`docker-compose.yml`
+  を `api`（DB 直結・非公開）／`web`（DB 非依存・非公開）／`proxy`（nginx。単一オリジンでパスルーティング）
+  へ再構成。`docker/nginx.conf`: `/login`・`/admin/console/*`→web、`/internal/*` 遮断、他→api。
+  `INTERNAL_SERVICE_TOKEN` を api・web で共有（`init.sh` が乱数生成、Compose が必須化）。`init.sh`・
+  `deploy.sh`・`OPERATIONS.md`・`.env.example` を分離構成へ更新。
+  （注: Docker イメージのビルドはサンドボックスの egress 制限〔apt ミラー 405〕で本環境では検証不可。
+  ワークスペースはホスト cargo で両バイナリともビルド・実機起動を確認済み、compose config は妥当。）
+
+## 2026-07-06（C1 P3-2 完了: ログイン画面を web crate へ移設）
+
+- **ログイン画面（`/login` GET/POST）と i18n を `web` crate へ移設**（ADR-0007 P3-2）。web はフォーム描画と
+  リダイレクトのみを担い、資格情報検証・SSO/code 発行は api の `POST /internal/authenticate` に委ねる。
+  web は接続元情報（`X-Forwarded-For` 由来 IP・User-Agent）を転送し、成功時に api が返す `sso_session_id` を
+  Cookie 化して `redirect_to` へ 302、`auth_session_id` Cookie を失効させる。エラーはローカライズして再描画。
+- **ログイン CSRF 導出を `contracts` に一元化**（`idp_contracts::csrf::login_csrf_token`）。web（フォーム描画）と
+  api（`LoginService` 検証）で同一導出を共有し、固定ベクタのユニットテストで齟齬を防ぐ。core は本関数へ委譲。
+- web に i18n・cookies・correlation・login ハンドラを実装（api の presentation から移植）。api 側の `/login` は
+  当面併存（全部入り E2E 維持のため。撤去は P3-4）。
+- 検証: `cargo build`／`clippy` 警告なし／lib テスト（api 31・core 45・contracts 2・web 7）。**api＋web＋MariaDB を
+  同時起動した実機 E2E**で、api `/authorize` →（別プロセスの）web `/login` GET/POST → api `/internal/authenticate`
+  → SSO Cookie 発行＋`code` 付き RP リダイレクト → api `/token` で `id_token` 発行、まで疎通を確認。web が転送した
+  IP が `sso_sessions.ip_address` に記録されることも確認。
+
+## 2026-07-06（C1 P3-1 完了: contracts crate ＋ web crate 土台）
+
+- **`contracts` crate（`idp-contracts`）を新設**（ADR-0007 §6）。内部認証 API（`/internal/authenticate*`）の
+  DTO を api の presentation から移設し、**api サーバと web クライアントで同一の serde 型を共有**する
+  （コンパイル時に契約整合を保証）。DB/axum/sqlx へは依存しない。
+- **`web` crate（`idp-web` / bin=`idp-web`）を新設**。web 固有設定（`API_BASE_URL`・共有サービストークン・
+  `WEB_BIND_ADDR` 等）、JSON ログ初期化、**reqwest ベースの API クライアント**（api への唯一の出入口。
+  内部認証呼び出しにサービストークンと correlation_id を付与）、ヘルスチェック（`/healthz` liveness、
+  `/readyz` は api への到達性で判断）を実装。
+- **web は sqlx / idp-core に依存しない**ことを `cargo tree` で確認（crate 境界で分離を強制。ADR の肝）。
+  api は無変更で全テスト緑。web バイナリの起動と `/healthz`=200・`/readyz`=503（api 停止時）を実機確認。
+- P3 は規模が大きいためステージ分割で進める（本コミットは土台）。ログイン画面・管理コンソール・i18n の
+  web 移設と、api からの HTML 撤去は後続ステージ。テスト再編は P5。
+
+## 2026-07-06（C1 P2 完了: 内部認証 API）
+
+- **内部認証エンドポイントを api に新設**（ADR-0007 §3・§5、C1 の P2）。OIDC 標準外の
+  `POST /internal/authenticate`（OIDC ログイン）と `POST /internal/authenticate/admin`（管理コンソール）。
+  将来の `web` crate が資格情報・`auth_session_id` 参照・接続元情報（IP/User-Agent）を JSON で転送し、api が
+  既存の `LoginService`／`AdminLoginService`（資格情報検証・ロックアウト §4.3・IP レート制限・SSO/code 発行・
+  監査）を実行して `result` タグ付き JSON を返す。Cookie 組み立て（Secure/HttpOnly/SameSite/TTL）とエラー
+  文言のローカライズは呼び出し側（web）の責務。
+- **サービス認証トークンで `/internal/*` を保護**（§5）。`X-Internal-Auth-Token` ヘッダを設定
+  `INTERNAL_SERVICE_TOKEN`（未設定時は開発用の既定値＋起動時警告）と定数時間比較し、不一致は 401。
+  `route_layer` で内部サブルータのみに適用（外部公開しない前提。リバースプロキシ遮断は P4）。
+- 内部 DTO は presentation（`dto.rs`）に定義し `result` で判別（`contracts` crate 化は P3）。既存 HTML
+  `/login`・`/admin/console/login` は同一プロセスのため引き続きユースケースを直接呼ぶ（API クライアント化は
+  P3）。外部から見た OIDC 契約（§4.2）は不変。`docs/OIDC_INPUT.md` §4.3 に実装メモを追記。
+- 検証: `cargo build`／`cargo clippy`（警告なし）／ユニットテスト（内部認証 3 件を追加）／MariaDB 実 DB での
+  統合テスト `tests/internal_auth.rs`（トークン 401・CSRF 不一致・認証成功で SSO/code 発行・管理認証失敗）と
+  既存 E2E（`oidc_flow` 等）を確認。
+
+## 2026-07-06（ADR-0007 Accepted・C1 P1 完了: cargo workspace 化）
+
+- **ADR-0007（API/Web サービス分割）を Accepted** とし、C1 の **P1（workspace 化）** を実施。単一クレート
+  `idp` を **cargo workspace** に分割した。`crates/core`（lib=`idp_core`）に domain/application/
+  infrastructure と config/telemetry（sqlx・DB 依存）を集約し、`crates/api`（lib=`idp_api` / bin=`idp`）に
+  presentation と `run()` を置く。api は core を再エクスポートするため presentation 内の `crate::domain` 等の
+  参照は不変。共通依存は `[workspace.dependencies]` で一元管理。
+- **all-in-one を保ったままの crate 境界作成**（P1 の方針どおり。web/contracts crate と Web→API HTTP 化は
+  後続 P2〜P5）。統合テストは `crates/api/tests/` へ移設（参照は `idp_api::*`）。`migrations/`・`i18n/` は
+  リポジトリルート据え置きで、`sqlx::migrate!("../../migrations")`／`include_str!(CARGO_MANIFEST_DIR/../../i18n)`
+  により crate から相対参照する。Dockerfile の builder を workspace ビルドへ更新（bin=`idp` は不変）。
+- 検証: `cargo build --workspace`／`cargo clippy --workspace --all-targets`（警告なし）／lib ユニットテスト
+  45 件パス。外部契約（OIDC・API 経路・バイナリ名）に変更なし。
+
 ## 2026-07-06（A3 完了: 状況確認画面）
 
 - **状況確認画面をサーバレンダリングで実装**（A3 完了、設計仕様 §7）。監査／ログインログ一覧
