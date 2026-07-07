@@ -2,19 +2,19 @@
 //!
 //! api の JSON 管理 API（利用者検索・取得・権限一覧/付与/剥奪・付与可能コード）を管理者の SSO Cookie
 //! 転送で呼び、結果を HTML に描画する。付与・剥奪の POST は Post/Redirect/Get で処理し、エラーは
-//! 権限画面へ `error` クエリで伝える。CSRF は `console_csrf_token`、HTML は [`escape`] を通す。
+//! 権限画面へ `error` クエリで伝える。CSRF は `console_csrf_token`、HTML は Askama テンプレートが自動エスケープする。
 
 use crate::api_client::AdminApiError;
 use crate::cookies;
 use crate::correlation::CorrelationId;
 use crate::csrf::console_csrf_token;
 use crate::handlers::admin_console::{
-    forbidden_response, redirect_to_login, render_layout, resolve_admin, AdminResolution,
+    forbidden_response, redirect_to_login, resolve_admin, AdminResolution,
 };
 use crate::handlers::found;
-use crate::html::escape;
 use crate::i18n::{Locale, Messages};
 use crate::state::WebState;
+use crate::templates::{render, ConsoleNotice, UsersPermissions, UsersSearch};
 use axum::extract::{Extension, Path, Query, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
@@ -67,9 +67,13 @@ pub async fn search(
             SearchResult::Found(&user),
         ))
         .into_response(),
-        Err(AdminApiError::NotFound) => {
-            Html(render_search(&messages, &admin, &term, SearchResult::NotFound)).into_response()
-        }
+        Err(AdminApiError::NotFound) => Html(render_search(
+            &messages,
+            &admin,
+            &term,
+            SearchResult::NotFound,
+        ))
+        .into_response(),
         Err(e) => map_data_error(&messages, &admin, &headers, e),
     }
 }
@@ -234,53 +238,20 @@ enum SearchResult<'a> {
 }
 
 fn render_search(messages: &Messages, admin: &str, term: &str, result: SearchResult) -> String {
-    let result_html = match result {
-        SearchResult::Empty => String::new(),
-        SearchResult::NotFound => {
-            format!("<p>{}</p>", escape(&messages.get("admin-users-search-none")))
-        }
-        SearchResult::Found(user) => render_user_result(messages, user),
+    let (user, not_found) = match result {
+        SearchResult::Empty => (None, false),
+        SearchResult::NotFound => (None, true),
+        SearchResult::Found(user) => (Some(user), false),
     };
-    let content = format!(
-        "<h2>{title}</h2>\n\
-         <form method=\"get\" action=\"{path}\">\n\
-         <p><label>{label}<br>\n\
-         <input type=\"text\" name=\"q\" value=\"{term}\" required></label><br><small>{hint}</small></p>\n\
-         <p><button type=\"submit\">{button}</button></p>\n\
-         </form>\n{result_html}",
-        title = escape(&messages.get("admin-users-title")),
-        path = USERS_PATH,
-        label = escape(&messages.get("admin-users-search-label")),
-        term = escape(term),
-        hint = escape(&messages.get("admin-users-search-hint")),
-        button = escape(&messages.get("admin-users-search-button")),
-    );
-    render_layout(messages, Some(admin), &content)
+    render(&UsersSearch {
+        messages,
+        admin: Some(admin),
+        term,
+        user,
+        not_found,
+    })
 }
 
-fn render_user_result(messages: &Messages, user: &UserSummaryResponse) -> String {
-    format!(
-        "<table>\n<tbody>\n\
-         <tr><th>{email_label}</th><td>{email}</td></tr>\n\
-         <tr><th>{username_label}</th><td>{username}</td></tr>\n\
-         <tr><th>{id_label}</th><td><code>{id}</code></td></tr>\n\
-         <tr><th>{status_label}</th><td>{status}</td></tr>\n\
-         </tbody></table>\n\
-         <p><a href=\"{path}/{id}/permissions\">{manage}</a></p>",
-        email_label = escape(&messages.get("admin-user-col-email")),
-        email = escape(&user.email),
-        username_label = escape(&messages.get("admin-user-col-username")),
-        username = escape(user.preferred_username.as_deref().unwrap_or("-")),
-        id_label = escape(&messages.get("admin-user-col-id")),
-        id = escape(&user.id),
-        status_label = escape(&messages.get("admin-user-col-status")),
-        status = escape(&user.status),
-        path = USERS_PATH,
-        manage = escape(&messages.get("admin-user-manage-permissions")),
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
 fn render_permissions(
     messages: &Messages,
     admin: &str,
@@ -290,87 +261,15 @@ fn render_permissions(
     csrf: &str,
     error_key: Option<&str>,
 ) -> String {
-    let error_html = error_key
-        .map(|k| {
-            format!(
-                "<p class=\"error\" role=\"alert\">{}</p>",
-                escape(&messages.get(k))
-            )
-        })
-        .unwrap_or_default();
-
-    let summary = format!(
-        "<dl>\n\
-         <dt>{email_label}</dt><dd>{email}</dd>\n\
-         <dt>{username_label}</dt><dd>{username}</dd>\n\
-         <dt>{id_label}</dt><dd><code>{id}</code></dd>\n\
-         <dt>{status_label}</dt><dd>{status}</dd>\n\
-         </dl>",
-        email_label = escape(&messages.get("admin-user-col-email")),
-        email = escape(&user.email),
-        username_label = escape(&messages.get("admin-user-col-username")),
-        username = escape(user.preferred_username.as_deref().unwrap_or("-")),
-        id_label = escape(&messages.get("admin-user-col-id")),
-        id = escape(&user.id),
-        status_label = escape(&messages.get("admin-user-col-status")),
-        status = escape(&user.status),
-    );
-
-    let current = if codes.is_empty() {
-        format!("<p>{}</p>", escape(&messages.get("admin-permissions-none")))
-    } else {
-        let rows: String = codes
-            .iter()
-            .map(|code| {
-                format!(
-                    "<tr><td><code>{code}</code></td>\
-                     <td><form method=\"post\" action=\"{path}/{id}/permissions/revoke\">\
-                     <input type=\"hidden\" name=\"csrf_token\" value=\"{csrf}\">\
-                     <input type=\"hidden\" name=\"permission_code\" value=\"{code}\">\
-                     <button type=\"submit\">{revoke}</button></form></td></tr>",
-                    code = escape(code),
-                    path = USERS_PATH,
-                    id = escape(&user.id),
-                    csrf = escape(csrf),
-                    revoke = escape(&messages.get("admin-permissions-revoke-button")),
-                )
-            })
-            .collect();
-        format!("<table>\n<tbody>{rows}</tbody></table>")
-    };
-
-    let options: String = available
-        .iter()
-        .map(|code| format!("<option value=\"{}\"></option>", escape(code)))
-        .collect();
-
-    let grant_form = format!(
-        "<h3>{grant_title}</h3>\n\
-         <form method=\"post\" action=\"{path}/{id}/permissions/grant\">\n\
-         <input type=\"hidden\" name=\"csrf_token\" value=\"{csrf}\">\n\
-         <p><label>{grant_label}<br>\n\
-         <input type=\"text\" name=\"permission_code\" list=\"admin-permission-codes\" required></label></p>\n\
-         <datalist id=\"admin-permission-codes\">{options}</datalist>\n\
-         <p><button type=\"submit\">{grant_button}</button></p>\n\
-         </form>",
-        grant_title = escape(&messages.get("admin-permissions-grant-title")),
-        path = USERS_PATH,
-        id = escape(&user.id),
-        csrf = escape(csrf),
-        grant_label = escape(&messages.get("admin-permissions-grant-label")),
-        grant_button = escape(&messages.get("admin-permissions-grant-button")),
-    );
-
-    let content = format!(
-        "<h2>{title}</h2>\n{error_html}\n{summary}\n\
-         <h3>{current_title}</h3>\n{current}\n{grant_form}\n\
-         <p><a href=\"{path}\">{back}</a></p>",
-        title = escape(&messages.get("admin-users-title")),
-        current_title = escape(&messages.get("admin-permissions-current")),
-        path = USERS_PATH,
-        back = escape(&messages.get("admin-users-back")),
-    );
-    render_layout(messages, Some(admin), &content)
+    render(&UsersPermissions {
+        messages,
+        admin: Some(admin),
+        user,
+        codes,
+        available,
+        csrf,
+        error_key,
+    })
 }
 
 // ── 共通ヘルパー ──────────────────────────────────────────────────────────────
@@ -384,35 +283,39 @@ fn locale(headers: &HeaderMap) -> Locale {
 }
 
 fn not_found(messages: &Messages, admin: &str) -> Response {
-    let content = format!(
-        "<h2>{title}</h2>\n<p>{msg}</p>\n<p><a href=\"{path}\">{back}</a></p>",
-        title = escape(&messages.get("admin-user-not-found-title")),
-        msg = escape(&messages.get("admin-user-not-found-message")),
-        path = USERS_PATH,
-        back = escape(&messages.get("admin-users-back")),
-    );
-    (
-        StatusCode::NOT_FOUND,
-        Html(render_layout(messages, Some(admin), &content)),
-    )
-        .into_response()
+    let body = render(&ConsoleNotice {
+        messages,
+        admin: Some(admin),
+        heading: Some(&messages.get("admin-user-not-found-title")),
+        message: &messages.get("admin-user-not-found-message"),
+        is_error: false,
+        back_href: Some(USERS_PATH),
+        back_label: &messages.get("admin-users-back"),
+    });
+    (StatusCode::NOT_FOUND, Html(body)).into_response()
 }
 
-fn map_data_error(messages: &Messages, admin: &str, headers: &HeaderMap, e: AdminApiError) -> Response {
+fn map_data_error(
+    messages: &Messages,
+    admin: &str,
+    headers: &HeaderMap,
+    e: AdminApiError,
+) -> Response {
     match e {
         AdminApiError::Unauthorized => redirect_to_login(),
         AdminApiError::Forbidden => forbidden_response(headers),
         AdminApiError::NotFound => not_found(messages, admin),
         _ => {
-            let content = format!(
-                "<p class=\"error\" role=\"alert\">{}</p>",
-                escape(&messages.get("admin-error-internal"))
-            );
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Html(render_layout(messages, Some(admin), &content)),
-            )
-                .into_response()
+            let body = render(&ConsoleNotice {
+                messages,
+                admin: Some(admin),
+                heading: None,
+                message: &messages.get("admin-error-internal"),
+                is_error: true,
+                back_href: None,
+                back_label: "",
+            });
+            (StatusCode::INTERNAL_SERVER_ERROR, Html(body)).into_response()
         }
     }
 }
@@ -437,7 +340,9 @@ mod tests {
     fn search_result_escapes_user_fields() {
         let messages = Messages::new(Locale::En);
         let html = render_search(&messages, "admin-1", "alice", SearchResult::Found(&user()));
-        assert!(html.contains("&lt;b&gt;alice&lt;/b&gt;"));
+        // Askama は HTML を数値文字参照でエスケープする（`<` → `&#60;`）。生タグが残らないことを確認する。
+        assert!(html.contains("&#60;b&#62;alice&#60;/b&#62;"));
+        assert!(!html.contains("<b>alice"));
         assert!(html.contains("/permissions"));
     }
 

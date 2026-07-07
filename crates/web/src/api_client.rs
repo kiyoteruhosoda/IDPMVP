@@ -12,8 +12,8 @@ use idp_contracts::admin::{
     UserSummaryResponse, WhoamiResponse,
 };
 use idp_contracts::auth::{
-    InternalAdminAuthenticateRequest, InternalAdminAuthenticateResponse, InternalAuthenticateRequest,
-    InternalAuthenticateResponse, InternalLogoutRequest,
+    InternalAdminAuthenticateRequest, InternalAdminAuthenticateResponse,
+    InternalAuthenticateRequest, InternalAuthenticateResponse, InternalLogoutRequest,
 };
 use reqwest::Method;
 

@@ -127,8 +127,10 @@ crates/
       main.rs         # ブートストラップ（idp_web::run）
       config.rs       # web 固有設定（API_BASE_URL・共有サービストークン等）
       api_client.rs   # api への reqwest クライアント（データ操作の唯一の出入口）
+      templates.rs    # Askama テンプレート構造体（描画のコンパイル時型検証。詳細は下記「画面描画」）
       router.rs handlers/ state.rs telemetry.rs
       # ログイン画面・管理コンソール・i18n は後続ステージで移設（P3）
+    templates/        # Askama の HTML テンプレート（console/layout.html を継承）。自動 HTML エスケープ
 
 migrations/           # sqlx マイグレーション（.sql）。crate からは ../../migrations で参照
 i18n/                 # fluent 翻訳（.ftl）。api から ../../i18n で埋め込み（移設完了で web へ移す）
@@ -220,6 +222,18 @@ async fn create_example(
 ```
 
 ---
+
+## 画面描画（web）
+
+- **HTML はコード生成（`format!`）ではなく Askama テンプレートで描画する。** テンプレートは
+  `crates/web/templates/` 配下の `.html`（共通レイアウトは `console/layout.html`）に置き、対応する
+  テンプレート構造体を `crates/web/src/templates.rs` に `#[derive(Template)]` で定義する。ハンドラは
+  構造体を組み立てて `templates::render(&t)` で文字列化する。
+- **エスケープはテンプレート任せにする。** `.html` テンプレートの `{{ }}` 出力は自動 HTML エスケープ
+  されるため、手動エスケープ関数を新設しない。生 HTML を差し込む `|safe` は原則使わず、共通レイアウトは
+  `{% extends %}` / `{% block %}` の継承で組む。
+- 翻訳文言はテンプレート内で `messages.get("キー")` を直接呼ぶ（i18n は下記）。
+- 画面固有のパス・ラベル分岐はテンプレート側の `{% if %}` で表現し、ハンドラは値の受け渡しに徹する。
 
 ## 国際化（i18n）
 

@@ -22,7 +22,10 @@ pub(crate) struct ForwardedContext {
 
 /// ブラウザからのリクエストヘッダを解釈し、api へ転送する接続元情報を組み立てる。
 /// IP はリバースプロキシ配下を想定して `X-Forwarded-For` の先頭値を使う。
-pub(crate) fn forwarded_context(headers: &HeaderMap, correlation: &CorrelationId) -> ForwardedContext {
+pub(crate) fn forwarded_context(
+    headers: &HeaderMap,
+    correlation: &CorrelationId,
+) -> ForwardedContext {
     let ip_address = headers
         .get("x-forwarded-for")
         .and_then(|v| v.to_str().ok())

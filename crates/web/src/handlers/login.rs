@@ -14,6 +14,7 @@ use crate::dto::LoginForm;
 use crate::handlers::{forwarded_context, found};
 use crate::i18n::{Locale, Messages};
 use crate::state::WebState;
+use crate::templates::{render, LoginTemplate, MessagePage};
 use axum::extract::{Extension, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{AppendHeaders, Html, IntoResponse, Response};
@@ -31,7 +32,22 @@ pub async fn login_page(headers: HeaderMap) -> Response {
             "login-error-session-expired",
         );
     };
-    Html(render_form(&messages, &login_csrf_token(&auth_session_id), None)).into_response()
+    Html(render_form(
+        &messages,
+        &login_csrf_token(&auth_session_id),
+        None,
+    ))
+    .into_response()
+}
+
+/// ログインフォームの HTML をテンプレートから描画する。埋め込む値（翻訳文言・CSRF トークン）は
+/// テンプレート側で自動 HTML エスケープされる。
+fn render_form(messages: &Messages, csrf: &str, error_key: Option<&str>) -> String {
+    render(&LoginTemplate {
+        messages,
+        csrf,
+        error_key,
+    })
 }
 
 /// ログインを実行する。api の内部認証を呼び、成功時は SSO Cookie を発行して `redirect_to` へ 302 する。
@@ -136,7 +152,11 @@ fn reshow_form(
     match auth_session_id {
         Some(id) => (
             status,
-            Html(render_form(messages, &login_csrf_token(id), Some(error_key))),
+            Html(render_form(
+                messages,
+                &login_csrf_token(id),
+                Some(error_key),
+            )),
         )
             .into_response(),
         None => error_page(
@@ -148,43 +168,9 @@ fn reshow_form(
 }
 
 fn error_page(messages: &Messages, status: StatusCode, error_key: &str) -> Response {
-    let title = messages.get("login-title");
-    let message = messages.get(error_key);
-    let body = format!(
-        "<!DOCTYPE html>\n<html><head><meta charset=\"utf-8\"><title>{title}</title></head>\
-         <body><h1>{title}</h1><p>{message}</p></body></html>"
-    );
+    let body = render(&MessagePage {
+        title: messages.get("login-title"),
+        message: messages.get(error_key),
+    });
     (status, Html(body)).into_response()
-}
-
-/// ログインフォームの HTML。埋め込む値は自前生成の翻訳文言と 16 進 CSRF トークンのみ
-/// （ユーザー入力は含まないため追加のエスケープは不要）。
-fn render_form(messages: &Messages, csrf: &str, error_key: Option<&str>) -> String {
-    let title = messages.get("login-title");
-    let username = messages.get("login-username");
-    let password = messages.get("login-password");
-    let submit = messages.get("login-submit");
-    let error_html = error_key
-        .map(|key| {
-            format!(
-                "<p class=\"error\" role=\"alert\">{}</p>",
-                messages.get(key)
-            )
-        })
-        .unwrap_or_default();
-
-    format!(
-        "<!DOCTYPE html>\n\
-         <html><head><meta charset=\"utf-8\"><title>{title}</title></head>\n\
-         <body>\n\
-         <h1>{title}</h1>\n\
-         {error_html}\n\
-         <form method=\"post\" action=\"/login\">\n\
-         <input type=\"hidden\" name=\"csrf_token\" value=\"{csrf}\">\n\
-         <label>{username} <input type=\"text\" name=\"username\" autocomplete=\"username\" required></label>\n\
-         <label>{password} <input type=\"password\" name=\"password\" autocomplete=\"current-password\" required></label>\n\
-         <button type=\"submit\">{submit}</button>\n\
-         </form>\n\
-         </body></html>"
-    )
 }

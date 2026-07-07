@@ -1,0 +1,20 @@
+{% extends "console/layout.html" %}
+{% block content %}
+<h2>{{ client.app_name }}</h2>
+<dl>
+<dt>{{ messages.get("admin-client-col-id") }}</dt><dd><code>{{ client.client_id }}</code></dd>
+<dt>{{ messages.get("admin-client-col-type") }}</dt><dd>{{ client.client_type }}</dd>
+<dt>{{ messages.get("admin-client-col-status") }}</dt><dd>{{ client.client_status }}</dd>
+<dt>{{ messages.get("admin-client-field-auth-method") }}</dt><dd>{{ client.token_endpoint_auth_method }}</dd>
+<dt>{{ messages.get("admin-client-field-pkce") }}</dt><dd>{% if client.require_pkce %}true{% else %}false{% endif %}</dd>
+<dt>{{ messages.get("admin-client-field-uris") }}</dt><dd>{% if client.redirect_uris.is_empty() %}-{% else %}<ul>{% for u in client.redirect_uris %}<li><code>{{ u }}</code></li>{% endfor %}</ul>{% endif %}</dd>
+<dt>{{ messages.get("admin-client-col-scopes") }}</dt><dd>{{ client.scopes.join(" ") }}</dd>
+<dt>{{ messages.get("admin-client-field-grants") }}</dt><dd>{{ client.grant_types.join(" ") }}</dd>
+<dt>{{ messages.get("admin-client-field-created") }}</dt><dd>{{ client.created_at }}</dd>
+<dt>{{ messages.get("admin-client-field-updated") }}</dt><dd>{{ client.updated_at }}</dd>
+</dl>
+<p><a href="/admin/console/clients/{{ client.client_id }}/edit">{{ messages.get("admin-client-edit") }}</a> | <a href="/admin/console/clients">{{ messages.get("admin-client-back") }}</a></p>
+{% if client.client_type == "confidential" %}
+<form method="post" action="/admin/console/clients/{{ client.client_id }}/rotate-secret"><input type="hidden" name="csrf_token" value="{{ csrf }}"><button type="submit">{{ messages.get("admin-client-rotate-secret") }}</button></form>
+{% endif %}
+{% endblock %}

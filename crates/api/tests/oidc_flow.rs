@@ -270,14 +270,18 @@ async fn full_authorization_code_flow_with_sso_and_audit() {
     assert_eq!(body["result"], "csrf_mismatch", "csrf mismatch");
 
     // 条件 4, 5, 7: ログイン成功 → SSO セッションと code を返す（web が Cookie 化して redirect）。
-    let (status, body) = internal_authenticate(&app, &auth_session, &username, password, &csrf).await;
+    let (status, body) =
+        internal_authenticate(&app, &auth_session, &username, password, &csrf).await;
     assert_eq!(status, StatusCode::OK, "login success");
     assert_eq!(body["result"], "success");
     let sso_cookie = body["sso_session_id"]
         .as_str()
         .expect("sso_session_id")
         .to_string();
-    let callback = body["redirect_to"].as_str().expect("redirect_to").to_string();
+    let callback = body["redirect_to"]
+        .as_str()
+        .expect("redirect_to")
+        .to_string();
     assert!(callback.starts_with(REDIRECT_URI));
     assert_eq!(
         query_param(&callback, "state").as_deref(),

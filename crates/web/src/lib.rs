@@ -15,11 +15,11 @@ pub mod correlation;
 pub mod csrf;
 pub mod dto;
 pub mod handlers;
-pub mod html;
 pub mod i18n;
 pub mod router;
 pub mod state;
 pub mod telemetry;
+pub mod templates;
 
 use anyhow::Context;
 use std::net::SocketAddr;

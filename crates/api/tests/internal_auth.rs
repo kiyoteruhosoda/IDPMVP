@@ -129,7 +129,11 @@ async fn start_authorize(app: &axum::Router, client_id: &str) -> String {
         "/authorize?response_type=code&client_id={client_id}&redirect_uri={}&scope=openid%20profile%20email&state=st&nonce=no&code_challenge={CODE_CHALLENGE}&code_challenge_method=S256",
         "http%3A%2F%2Flocalhost%3A3000%2Fcallback"
     );
-    let response = send(app, Request::builder().uri(uri).body(Body::empty()).unwrap()).await;
+    let response = send(
+        app,
+        Request::builder().uri(uri).body(Body::empty()).unwrap(),
+    )
+    .await;
     assert_eq!(response.status(), StatusCode::FOUND, "authorize -> login");
     cookie_value(&response, "auth_session_id").expect("auth_session_id cookie")
 }
@@ -241,12 +245,11 @@ async fn authenticate_requires_service_token_and_issues_sso_and_code() {
 
     // SSO セッションが DB に作成され、web から転送された接続元 IP が記録されている
     // （並行する他テストと干渉しないよう、この試行に固有の IP で絞り込む）。
-    let count: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM sso_sessions WHERE ip_address = ?")
-            .bind("203.0.113.7")
-            .fetch_one(&pool)
-            .await
-            .expect("query sso_sessions");
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sso_sessions WHERE ip_address = ?")
+        .bind("203.0.113.7")
+        .fetch_one(&pool)
+        .await
+        .expect("query sso_sessions");
     assert!(count >= 1, "an SSO session recorded with the forwarded IP");
 }
 

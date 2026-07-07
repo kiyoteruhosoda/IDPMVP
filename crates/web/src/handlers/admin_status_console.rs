@@ -1,18 +1,18 @@
 //! 状況確認画面（web。A3・ADR-0007 §4）。監査／ログインログ一覧とクライアント状況一覧。
 //!
 //! api の JSON 管理 API（`GET /admin/audit-logs`・`GET /admin/clients/status`）を管理者の SSO Cookie
-//! 転送で呼び、結果を HTML に描画する。読み取り専用のため CSRF は無い。文字列は [`escape`] を通す。
-//! 期間（from/to）の形式不正は api が 400 を返すため、web はそれを日時エラー表示へ写す。
+//! 転送で呼び、結果を Askama テンプレートに描画する（`{{ }}` は自動 HTML エスケープ）。読み取り専用の
+//! ため CSRF は無い。期間（from/to）の形式不正は api が 400 を返すため、web はそれを日時エラー表示へ写す。
 
 use crate::admin_dto::AuditLogView;
 use crate::api_client::AdminApiError;
 use crate::correlation::CorrelationId;
 use crate::handlers::admin_console::{
-    forbidden_response, redirect_to_login, render_layout, resolve_admin, AdminResolution,
+    forbidden_response, redirect_to_login, resolve_admin, AdminResolution,
 };
-use crate::html::escape;
 use crate::i18n::{Locale, Messages};
 use crate::state::WebState;
+use crate::templates::{render, AuditLogs, ClientStatus, ConsoleNotice};
 use axum::extract::{Extension, Query, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
@@ -76,9 +76,10 @@ pub async fn audit_logs(
         .await;
     let messages = Messages::new(locale(&headers));
     match result {
-        Ok(entries) => {
-            Html(render_audit(&messages, &admin, &form, offset, false, &entries)).into_response()
-        }
+        Ok(entries) => Html(render_audit(
+            &messages, &admin, &form, offset, false, &entries,
+        ))
+        .into_response(),
         // from/to の形式不正（api が 400）→ 日時エラー表示・空一覧。
         Err(AdminApiError::Validation(_)) => {
             Html(render_audit(&messages, &admin, &form, offset, true, &[])).into_response()
@@ -127,126 +128,29 @@ fn render_audit(
     date_error: bool,
     entries: &[AuditLogView],
 ) -> String {
-    let error_html = if date_error {
-        format!(
-            "<p class=\"error\" role=\"alert\">{}</p>",
-            escape(&messages.get("admin-audit-error-datetime"))
-        )
-    } else {
-        String::new()
-    };
-
-    let table = if entries.is_empty() {
-        format!("<p>{}</p>", escape(&messages.get("admin-audit-none")))
-    } else {
-        let rows: String = entries.iter().map(render_audit_row).collect();
-        format!(
-            "<table>\n<thead><tr>\
-             <th>{time}</th><th>{event}</th><th>{result}</th><th>{client}</th>\
-             <th>{corr}</th><th>{ip}</th><th>{reason}</th></tr></thead>\n\
-             <tbody>{rows}</tbody></table>",
-            time = escape(&messages.get("admin-audit-col-time")),
-            event = escape(&messages.get("admin-audit-col-event")),
-            result = escape(&messages.get("admin-audit-col-result")),
-            client = escape(&messages.get("admin-audit-col-client")),
-            corr = escape(&messages.get("admin-audit-col-correlation")),
-            ip = escape(&messages.get("admin-audit-col-ip")),
-            reason = escape(&messages.get("admin-audit-col-reason")),
-        )
-    };
-
-    let content = format!(
-        "<h2>{title}</h2>\n{error_html}\n{form_html}\n{table}\n{pager}\n\
-         <p><a href=\"/admin/console\">{home}</a></p>",
-        title = escape(&messages.get("admin-audit-title")),
-        form_html = render_audit_form(messages, form),
-        pager = render_pager(messages, form, offset, entries.len()),
-        home = escape(&messages.get("admin-nav-home")),
-    );
-    render_layout(messages, Some(admin), &content)
+    let (prev_href, next_href) = pager_links(form, offset, entries.len());
+    render(&AuditLogs {
+        messages,
+        admin: Some(admin),
+        date_error,
+        event_type: form.event_type.as_deref().unwrap_or(""),
+        result: form.result.as_deref().unwrap_or(""),
+        client_id: form.client_id.as_deref().unwrap_or(""),
+        correlation_id: form.correlation_id.as_deref().unwrap_or(""),
+        from: form.from.as_deref().unwrap_or(""),
+        to: form.to.as_deref().unwrap_or(""),
+        entries,
+        prev_href,
+        next_href,
+    })
 }
 
-fn render_audit_row(e: &AuditLogView) -> String {
-    let result_class = if e.result == "failure" {
-        " class=\"result-failure\""
-    } else {
-        ""
-    };
-    format!(
-        "<tr><td>{time}</td><td><code>{event}</code></td><td{rclass}>{result}</td>\
-         <td>{client}</td><td><code>{corr}</code></td><td>{ip}</td><td>{reason}</td></tr>",
-        time = escape(&e.occurred_at),
-        event = escape(&e.event_type),
-        rclass = result_class,
-        result = escape(&e.result),
-        client = escape(e.client_id.as_deref().unwrap_or("-")),
-        corr = escape(&e.correlation_id),
-        ip = escape(e.ip_address.as_deref().unwrap_or("-")),
-        reason = escape(e.reason.as_deref().unwrap_or("-")),
-    )
-}
-
-fn render_audit_form(messages: &Messages, form: &AuditForm) -> String {
-    let v = |o: &Option<String>| escape(o.as_deref().unwrap_or(""));
-    let result = form.result.as_deref().unwrap_or("");
-    format!(
-        "<form method=\"get\" action=\"{path}\">\n\
-         <p><label>{event_label} <input type=\"text\" name=\"event_type\" value=\"{event}\"></label>\n\
-         <label>{result_label} <select name=\"result\">\
-         <option value=\"\"{all_sel}>{result_all}</option>\
-         <option value=\"success\"{ok_sel}>success</option>\
-         <option value=\"failure\"{fail_sel}>failure</option></select></label></p>\n\
-         <p><label>{client_label} <input type=\"text\" name=\"client_id\" value=\"{client}\"></label>\n\
-         <label>{corr_label} <input type=\"text\" name=\"correlation_id\" value=\"{corr}\"></label></p>\n\
-         <p><label>{from_label} <input type=\"text\" name=\"from\" value=\"{from}\" placeholder=\"2026-07-06T00:00:00Z\"></label>\n\
-         <label>{to_label} <input type=\"text\" name=\"to\" value=\"{to}\" placeholder=\"2026-07-06T23:59:59Z\"></label>\
-         <small>{dt_hint}</small></p>\n\
-         <p><button type=\"submit\">{search}</button> <a href=\"{path}\">{reset}</a></p>\n\
-         </form>",
-        path = AUDIT_PATH,
-        event_label = escape(&messages.get("admin-audit-filter-event")),
-        event = v(&form.event_type),
-        result_label = escape(&messages.get("admin-audit-filter-result")),
-        result_all = escape(&messages.get("admin-audit-filter-result-all")),
-        all_sel = selected(result.is_empty()),
-        ok_sel = selected(result == "success"),
-        fail_sel = selected(result == "failure"),
-        client_label = escape(&messages.get("admin-audit-filter-client")),
-        client = v(&form.client_id),
-        corr_label = escape(&messages.get("admin-audit-filter-correlation")),
-        corr = v(&form.correlation_id),
-        from_label = escape(&messages.get("admin-audit-filter-from")),
-        from = v(&form.from),
-        to_label = escape(&messages.get("admin-audit-filter-to")),
-        to = v(&form.to),
-        dt_hint = escape(&messages.get("admin-audit-filter-datetime-hint")),
-        search = escape(&messages.get("admin-audit-search")),
-        reset = escape(&messages.get("admin-audit-reset")),
-    )
-}
-
-fn render_pager(messages: &Messages, form: &AuditForm, offset: i64, page_len: usize) -> String {
-    let mut links = Vec::new();
-    if offset > 0 {
-        let prev = (offset - DEFAULT_LIMIT).max(0);
-        links.push(format!(
-            "<a href=\"{}\">{}</a>",
-            audit_query_string(form, prev),
-            escape(&messages.get("admin-audit-prev"))
-        ));
-    }
-    if page_len as i64 == DEFAULT_LIMIT {
-        links.push(format!(
-            "<a href=\"{}\">{}</a>",
-            audit_query_string(form, offset + DEFAULT_LIMIT),
-            escape(&messages.get("admin-audit-next"))
-        ));
-    }
-    if links.is_empty() {
-        String::new()
-    } else {
-        format!("<p class=\"pager\">{}</p>", links.join(" | "))
-    }
+/// ページャの前後リンク（クエリ文字列付き URL）。該当がなければ `None`。
+fn pager_links(form: &AuditForm, offset: i64, page_len: usize) -> (Option<String>, Option<String>) {
+    let prev = (offset > 0).then(|| audit_query_string(form, (offset - DEFAULT_LIMIT).max(0)));
+    let next = (page_len as i64 == DEFAULT_LIMIT)
+        .then(|| audit_query_string(form, offset + DEFAULT_LIMIT));
+    (prev, next)
 }
 
 fn audit_query_string(form: &AuditForm, offset: i64) -> String {
@@ -272,52 +176,14 @@ fn audit_query_string(form: &AuditForm, offset: i64) -> String {
 }
 
 fn render_status(messages: &Messages, admin: &str, views: &[ClientStatusResponse]) -> String {
-    let body = if views.is_empty() {
-        format!("<p>{}</p>", escape(&messages.get("admin-status-none")))
-    } else {
-        let rows: String = views
-            .iter()
-            .map(|v| {
-                format!(
-                    "<tr><td>{name}</td><td><code>{id}</code></td><td>{status}</td>\
-                     <td>{scopes}</td><td>{last_used}</td></tr>",
-                    name = escape(&v.app_name),
-                    id = escape(&v.client_id),
-                    status = escape(&v.status),
-                    scopes = escape(&v.scopes.join(" ")),
-                    last_used = escape(v.last_used_at.as_deref().unwrap_or("-")),
-                )
-            })
-            .collect();
-        format!(
-            "<table>\n<thead><tr>\
-             <th>{name}</th><th>{id}</th><th>{status}</th><th>{scopes}</th><th>{last_used}</th></tr></thead>\n\
-             <tbody>{rows}</tbody></table>",
-            name = escape(&messages.get("admin-status-col-name")),
-            id = escape(&messages.get("admin-status-col-id")),
-            status = escape(&messages.get("admin-status-col-status")),
-            scopes = escape(&messages.get("admin-status-col-scopes")),
-            last_used = escape(&messages.get("admin-status-col-last-used")),
-        )
-    };
-    let content = format!(
-        "<h2>{title}</h2>\n<p>{intro}</p>\n{body}\n<p><a href=\"/admin/console\">{home}</a></p>",
-        title = escape(&messages.get("admin-status-title")),
-        intro = escape(&messages.get("admin-status-intro")),
-        home = escape(&messages.get("admin-nav-home")),
-    );
-    render_layout(messages, Some(admin), &content)
+    render(&ClientStatus {
+        messages,
+        admin: Some(admin),
+        views,
+    })
 }
 
 // ── 共通ヘルパー ──────────────────────────────────────────────────────────────
-
-fn selected(on: bool) -> &'static str {
-    if on {
-        " selected"
-    } else {
-        ""
-    }
-}
 
 fn urlencode(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
@@ -341,15 +207,16 @@ fn locale(headers: &HeaderMap) -> Locale {
 }
 
 fn internal_error(messages: &Messages, admin: &str) -> Response {
-    let content = format!(
-        "<p class=\"error\" role=\"alert\">{}</p>",
-        escape(&messages.get("admin-error-internal"))
-    );
-    (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        Html(render_layout(messages, Some(admin), &content)),
-    )
-        .into_response()
+    let body = render(&ConsoleNotice {
+        messages,
+        admin: Some(admin),
+        heading: None,
+        message: &messages.get("admin-error-internal"),
+        is_error: true,
+        back_href: None,
+        back_label: "",
+    });
+    (StatusCode::INTERNAL_SERVER_ERROR, Html(body)).into_response()
 }
 
 #[cfg(test)]
@@ -382,8 +249,9 @@ mod tests {
             false,
             &[entry("login.failed", "failure", Some("<bad>"))],
         );
-        assert!(html.contains("&lt;client&gt;"));
-        assert!(html.contains("&lt;bad&gt;"));
+        // Askama は HTML を数値文字参照でエスケープする（`<` → `&#60;`）。生タグが残らないことを確認する。
+        assert!(html.contains("&#60;client&#62;"));
+        assert!(html.contains("&#60;bad&#62;"));
         assert!(html.contains("result-failure"));
         assert!(!html.contains("<client>"));
     }
@@ -428,7 +296,8 @@ mod tests {
             },
         ];
         let html = render_status(&messages, "admin-1", &views);
-        assert!(html.contains("&lt;Used&gt;"));
+        // Askama は HTML を数値文字参照でエスケープする（`<` → `&#60;`）。
+        assert!(html.contains("&#60;Used&#62;"));
         assert!(html.contains("DISABLED"));
         assert!(html.contains("openid profile"));
         assert!(html.contains("<td>-</td>"));

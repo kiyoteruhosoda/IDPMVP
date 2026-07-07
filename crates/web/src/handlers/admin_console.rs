@@ -15,6 +15,7 @@ use crate::dto::LoginForm;
 use crate::handlers::{forwarded_context, found};
 use crate::i18n::{Locale, Messages};
 use crate::state::WebState;
+use crate::templates::{render, ConsoleHome, ConsoleLogin, MessagePage};
 use axum::extract::{Extension, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{AppendHeaders, Html, IntoResponse, Response};
@@ -39,21 +40,11 @@ pub async fn home(
         AdminResolution::Reject(resp) => return resp,
     };
     let messages = Messages::new(locale(&headers));
-    let content = format!(
-        "<p>{intro}</p>\n\
-         <ul class=\"admin-sections\">\n\
-         <li><a href=\"/admin/console/clients\">{clients}</a></li>\n\
-         <li><a href=\"/admin/console/status\">{status}</a></li>\n\
-         <li><a href=\"/admin/console/audit-logs\">{audit}</a></li>\n\
-         <li><a href=\"/admin/console/users\">{permissions}</a></li>\n\
-         </ul>",
-        intro = messages.get("admin-home-intro"),
-        clients = messages.get("admin-nav-clients"),
-        status = messages.get("admin-nav-status"),
-        audit = messages.get("admin-nav-audit"),
-        permissions = messages.get("admin-nav-permissions"),
-    );
-    Html(render_layout(&messages, Some(&admin), &content)).into_response()
+    Html(render(&ConsoleHome {
+        messages: &messages,
+        admin: Some(&admin),
+    }))
+    .into_response()
 }
 
 /// 管理ログインフォーム（`GET /admin/console/login`）。既にログイン済みならホームへ 302 する。
@@ -64,9 +55,7 @@ pub async fn login_page(
 ) -> Response {
     // 既に有効な SSO ＋ 権限を持つならホームへ。
     if let Some(sso) = cookies::get(&headers, cookies::SSO_SESSION_COOKIE) {
-        if let AdminSession::Authenticated(_) =
-            state.api.admin_whoami(&correlation.0, &sso).await
-        {
+        if let AdminSession::Authenticated(_) = state.api.admin_whoami(&correlation.0, &sso).await {
             return found(CONSOLE_HOME_PATH);
         }
     }
@@ -166,9 +155,12 @@ pub async fn login(
             &csrf,
             "login-error-invalid-credentials",
         ),
-        InternalAdminAuthenticateResponse::Locked => {
-            reshow_login(&messages, StatusCode::FORBIDDEN, &csrf, "login-error-locked")
-        }
+        InternalAdminAuthenticateResponse::Locked => reshow_login(
+            &messages,
+            StatusCode::FORBIDDEN,
+            &csrf,
+            "login-error-locked",
+        ),
         InternalAdminAuthenticateResponse::Forbidden => reshow_login(
             &messages,
             StatusCode::FORBIDDEN,
@@ -227,9 +219,9 @@ pub(crate) async fn resolve_admin(
         AdminSession::Authenticated(user_id) => AdminResolution::Ok(user_id),
         AdminSession::Unauthenticated => AdminResolution::Reject(redirect_to_login()),
         AdminSession::Forbidden => AdminResolution::Reject(forbidden_response(headers)),
-        AdminSession::Error => AdminResolution::Reject(
-            (StatusCode::BAD_GATEWAY, Html(String::new())).into_response(),
-        ),
+        AdminSession::Error => {
+            AdminResolution::Reject((StatusCode::BAD_GATEWAY, Html(String::new())).into_response())
+        }
     }
 }
 
@@ -241,12 +233,10 @@ pub(crate) fn redirect_to_login() -> Response {
 /// 権限不足を伝える最小限の HTML ページ（403）。管理コンソール各画面から再利用する。
 pub(crate) fn forbidden_response(headers: &HeaderMap) -> Response {
     let messages = Messages::new(locale(headers));
-    let title = messages.get("admin-forbidden-title");
-    let message = messages.get("admin-forbidden-message");
-    let body = format!(
-        "<!DOCTYPE html>\n<html><head><meta charset=\"utf-8\"><title>{title}</title></head>\
-         <body><h1>{title}</h1><p>{message}</p></body></html>"
-    );
+    let body = render(&MessagePage {
+        title: messages.get("admin-forbidden-title"),
+        message: messages.get("admin-forbidden-message"),
+    });
     (StatusCode::FORBIDDEN, Html(body)).into_response()
 }
 
@@ -266,63 +256,13 @@ fn reshow_login(messages: &Messages, status: StatusCode, csrf: &str, error_key: 
         .into_response()
 }
 
-/// 管理コンソール共通レイアウト（ヘッダ・ナビ・ログアウト）。各画面はこの上に `content` を差し込む。
-/// 埋め込む値は翻訳文言・信頼できる内部 ID のみで、ユーザー入力は含まない。
-pub fn render_layout(messages: &Messages, admin_user_id: Option<&str>, content: &str) -> String {
-    let title = messages.get("admin-console-title");
-    let header = match admin_user_id {
-        Some(uid) => format!(
-            "<header class=\"admin-header\">\n\
-             <span class=\"admin-title\">{title}</span>\n\
-             <span class=\"admin-user\">{signed_in}: {uid}</span>\n\
-             <form method=\"post\" action=\"{logout_path}\" class=\"admin-logout\">\
-             <button type=\"submit\">{logout}</button></form>\n\
-             </header>",
-            signed_in = messages.get("admin-signed-in-as"),
-            logout_path = CONSOLE_LOGOUT_PATH,
-            logout = messages.get("admin-logout"),
-        ),
-        None => format!(
-            "<header class=\"admin-header\"><span class=\"admin-title\">{title}</span></header>"
-        ),
-    };
-    format!(
-        "<!DOCTYPE html>\n\
-         <html><head><meta charset=\"utf-8\"><title>{title}</title></head>\n\
-         <body>\n{header}\n<main>\n{content}\n</main>\n</body></html>"
-    )
-}
-
-/// ログインフォームの HTML。埋め込む値は翻訳文言と 16 進 CSRF トークンのみ（ユーザー入力なし）。
+/// 管理ログインフォームの HTML をテンプレートから描画する（埋め込む値は自動 HTML エスケープされる）。
 fn render_login_form(messages: &Messages, csrf: &str, error_key: Option<&str>) -> String {
-    let title = messages.get("admin-login-title");
-    let username = messages.get("login-username");
-    let password = messages.get("login-password");
-    let submit = messages.get("login-submit");
-    let error_html = error_key
-        .map(|key| {
-            format!(
-                "<p class=\"error\" role=\"alert\">{}</p>",
-                messages.get(key)
-            )
-        })
-        .unwrap_or_default();
-
-    format!(
-        "<!DOCTYPE html>\n\
-         <html><head><meta charset=\"utf-8\"><title>{title}</title></head>\n\
-         <body>\n\
-         <h1>{title}</h1>\n\
-         {error_html}\n\
-         <form method=\"post\" action=\"{action}\">\n\
-         <input type=\"hidden\" name=\"csrf_token\" value=\"{csrf}\">\n\
-         <label>{username} <input type=\"text\" name=\"username\" autocomplete=\"username\" required></label>\n\
-         <label>{password} <input type=\"password\" name=\"password\" autocomplete=\"current-password\" required></label>\n\
-         <button type=\"submit\">{submit}</button>\n\
-         </form>\n\
-         </body></html>",
-        action = ADMIN_LOGIN_PATH,
-    )
+    render(&ConsoleLogin {
+        messages,
+        csrf,
+        error_key,
+    })
 }
 
 #[cfg(test)]
@@ -341,13 +281,14 @@ mod tests {
     }
 
     #[test]
-    fn layout_shows_identity_and_logout_when_signed_in() {
+    fn home_lists_sections_and_logout_for_signed_in_admin() {
         let messages = Messages::new(Locale::En);
-        let html = render_layout(&messages, Some("user-123"), "<p>body</p>");
+        let html = render(&ConsoleHome {
+            messages: &messages,
+            admin: Some("user-123"),
+        });
         assert!(html.contains("user-123"));
         assert!(html.contains("action=\"/admin/console/logout\""));
-        assert!(html.contains("<p>body</p>"));
-        let anon = render_layout(&messages, None, "x");
-        assert!(!anon.contains("/admin/console/logout"));
+        assert!(html.contains("/admin/console/clients"));
     }
 }

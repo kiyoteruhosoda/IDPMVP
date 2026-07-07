@@ -20,15 +20,15 @@ use crate::application::audit::RequestContext;
 use crate::application::login::{LoginCommand, LoginOutcome};
 use crate::presentation::correlation::CorrelationId;
 use crate::presentation::state::AppState;
-use idp_contracts::auth::{
-    InternalAdminAuthenticateRequest, InternalAdminAuthenticateResponse, InternalAuthenticateRequest,
-    InternalAuthenticateResponse, InternalLogoutRequest,
-};
 use axum::extract::{Extension, Request, State};
 use axum::http::StatusCode;
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
+use idp_contracts::auth::{
+    InternalAdminAuthenticateRequest, InternalAdminAuthenticateResponse,
+    InternalAuthenticateRequest, InternalAuthenticateResponse, InternalLogoutRequest,
+};
 
 /// 内部サービス認証トークンを載せるヘッダ名（小文字。`HeaderMap` は大小無視で引ける）。
 const SERVICE_TOKEN_HEADER: &str = "x-internal-auth-token";
@@ -196,7 +196,8 @@ mod tests {
         assert_eq!(json["sso_session_id"], "sso-123");
         assert_eq!(json["sso_absolute_ttl_secs"], 86_400);
 
-        let invalid = serde_json::to_value(InternalAuthenticateResponse::InvalidCredentials).unwrap();
+        let invalid =
+            serde_json::to_value(InternalAuthenticateResponse::InvalidCredentials).unwrap();
         assert_eq!(invalid["result"], "invalid_credentials");
         // 失敗系は判別子以外のフィールドを持たない。
         assert_eq!(invalid.as_object().unwrap().len(), 1);
@@ -204,8 +205,7 @@ mod tests {
 
     #[test]
     fn admin_response_is_tagged_by_result() {
-        let forbidden =
-            serde_json::to_value(InternalAdminAuthenticateResponse::Forbidden).unwrap();
+        let forbidden = serde_json::to_value(InternalAdminAuthenticateResponse::Forbidden).unwrap();
         assert_eq!(forbidden["result"], "forbidden");
 
         let ok = serde_json::to_value(InternalAdminAuthenticateResponse::Success {
