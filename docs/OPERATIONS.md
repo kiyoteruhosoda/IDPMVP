@@ -35,8 +35,19 @@ cargo test                             # 単体テストのみ（DB 不要）
 TEST_DATABASE_URL='mysql://idp:idp@127.0.0.1:3306/idp' cargo test   # 統合テスト込み
 ```
 
-統合テスト（`tests/schema.rs` / `keys.rs` / `register.rs` / `oidc_flow.rs`）は
-`TEST_DATABASE_URL` 未設定時はスキップされる。
+統合テスト（`tests/schema.rs` / `keys.rs` / `register.rs` / `oidc_flow.rs` ほか）は
+`TEST_DATABASE_URL` 未設定時はスキップされる。`oidc_flow` は api 単体（ログイン検証は
+`POST /internal/authenticate` 経由）で駆動する。
+
+**web→api の疎通 E2E**（2 サービスを実際に起動して検証、ADR-0007）:
+
+```sh
+# 前提: MariaDB 起動＋マイグレーション適用済み（seed 管理ユーザーが必要）。
+TEST_DATABASE_URL='mysql://idp:idp@127.0.0.1:3306/idp' ./scripts/e2e.sh
+```
+
+api・web を別プロセスで起動し、`/authorize`→web `/login`→`/token` の OIDC フローと、管理コンソール
+（ログイン・クライアント作成・権限付与・状況/監査）をブラウザ相当の HTTP で通す。終了時に自動で停止する。
 
 ## クライアントを登録したいとき
 
