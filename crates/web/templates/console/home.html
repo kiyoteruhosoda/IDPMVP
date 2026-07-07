@@ -1,0 +1,10 @@
+{% extends "console/layout.html" %}
+{% block content %}
+<p>{{ messages.get("admin-home-intro") }}</p>
+<ul class="admin-sections">
+<li><a href="/admin/console/clients">{{ messages.get("admin-nav-clients") }}</a></li>
+<li><a href="/admin/console/status">{{ messages.get("admin-nav-status") }}</a></li>
+<li><a href="/admin/console/audit-logs">{{ messages.get("admin-nav-audit") }}</a></li>
+<li><a href="/admin/console/users">{{ messages.get("admin-nav-permissions") }}</a></li>
+</ul>
+{% endblock %}

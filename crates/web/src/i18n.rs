@@ -7,8 +7,14 @@
 use fluent::{FluentBundle, FluentResource};
 use unic_langid::{langid, LanguageIdentifier};
 
-const EN_FTL: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../i18n/en/main.ftl"));
-const JA_FTL: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../i18n/ja/main.ftl"));
+const EN_FTL: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../i18n/en/main.ftl"
+));
+const JA_FTL: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../i18n/ja/main.ftl"
+));
 
 /// 対応ロケール。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

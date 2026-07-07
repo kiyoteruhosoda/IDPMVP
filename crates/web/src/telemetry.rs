@@ -5,8 +5,8 @@ use tracing_subscriber::EnvFilter;
 
 /// ログを初期化する。`RUST_LOG` があれば優先し、無ければ既定フィルタを使う。
 pub fn init(config: &Config) {
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("info,idp_web=info"));
+    let filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info,idp_web=info"));
 
     match config.log_format() {
         LogFormat::Json => tracing_subscriber::fmt()

@@ -2,8 +2,8 @@
 //!
 //! api の JSON 管理 API（`/admin/clients*`、`RequirePerms<IdpAdmin>`）を管理者の SSO Cookie 転送で呼び、
 //! 結果を HTML に描画する。認可・データ操作・監査は api 側。web は画面と CSRF（`console_csrf_token`）のみ。
-//! 利用者入力を HTML へ差し込む箇所はすべて [`escape`] を通す。`client_secret` は作成・再発行時に
-//! その画面でのみ平文表示する。
+//! HTML の描画は Askama テンプレート（`templates/console/`）で行い、利用者入力は自動エスケープされる。
+//! `client_secret` は作成・再発行時にその画面でのみ平文表示する。
 
 use crate::admin_dto::{ClientCreatedView, ClientView};
 use crate::api_client::AdminApiError;
@@ -11,12 +11,14 @@ use crate::cookies;
 use crate::correlation::CorrelationId;
 use crate::csrf::console_csrf_token;
 use crate::handlers::admin_console::{
-    forbidden_response, redirect_to_login, render_layout, resolve_admin, AdminResolution,
+    forbidden_response, redirect_to_login, resolve_admin, AdminResolution,
 };
 use crate::handlers::found;
-use crate::html::escape;
 use crate::i18n::{Locale, Messages};
 use crate::state::WebState;
+use crate::templates::{
+    render, ClientDetail, ClientForm, ClientFormValues, ClientSecret, ClientsList, ConsoleNotice,
+};
 use axum::extract::{Extension, Path, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
@@ -66,7 +68,7 @@ pub async fn new_form(
         &messages,
         &admin,
         &csrf,
-        &FormValues::default_new(),
+        &ClientFormValues::default_new(),
         None,
     ))
     .into_response()
@@ -92,7 +94,7 @@ pub async fn create(
     Form(form): Form<NewClientForm>,
 ) -> Response {
     let admin = admin_or_return!(&state, &correlation, &headers);
-    let values = FormValues {
+    let values = ClientFormValues {
         app_name: form.app_name.clone(),
         client_type: form.client_type.clone(),
         redirect_uris: form.redirect_uris.clone(),
@@ -131,9 +133,9 @@ pub async fn create(
         Ok(created) => {
             Html(render_secret_result(&messages, &admin, &created, true)).into_response()
         }
-        Err(AdminApiError::Validation(m)) | Err(AdminApiError::Conflict(m)) => {
-            bad_request_form(render_new_form_with_message(&messages, &admin, &csrf, &values, &m))
-        }
+        Err(AdminApiError::Validation(m)) | Err(AdminApiError::Conflict(m)) => bad_request_form(
+            render_new_form_with_message(&messages, &admin, &csrf, &values, &m),
+        ),
         Err(e) => map_data_error(&messages, &admin, &headers, e),
     }
 }
@@ -177,7 +179,7 @@ pub async fn edit_form(
     let csrf = csrf_from(&headers);
     match result {
         Ok(client) => {
-            let values = FormValues::from_client(&client);
+            let values = ClientFormValues::from_client(&client);
             Html(render_edit_form(
                 &messages, &admin, &client, &csrf, &values, None,
             ))
@@ -224,7 +226,7 @@ pub async fn update(
             return map_data_error(&messages, &admin, &headers, e);
         }
     };
-    let mut values = FormValues::from_client(&client);
+    let mut values = ClientFormValues::from_client(&client);
     values.app_name = form.app_name.clone();
     values.redirect_uris = form.redirect_uris.clone();
     values.scopes = form.scopes.clone();
@@ -235,7 +237,12 @@ pub async fn update(
         let csrf = csrf_from(&headers);
         let err = messages.get("admin-error-csrf");
         return bad_request_form(render_edit_form(
-            &messages, &admin, &client, &csrf, &values, Some(err),
+            &messages,
+            &admin,
+            &client,
+            &csrf,
+            &values,
+            Some(err),
         ));
     }
 
@@ -254,11 +261,9 @@ pub async fn update(
     match result {
         Ok(_) => found(&format!("{CLIENTS_PATH}/{client_id}")),
         Err(AdminApiError::NotFound) => not_found(&messages, &admin),
-        Err(AdminApiError::Validation(m)) | Err(AdminApiError::Conflict(m)) => {
-            bad_request_form(render_edit_form(
-                &messages, &admin, &client, &csrf, &values, Some(m),
-            ))
-        }
+        Err(AdminApiError::Validation(m)) | Err(AdminApiError::Conflict(m)) => bad_request_form(
+            render_edit_form(&messages, &admin, &client, &csrf, &values, Some(m)),
+        ),
         Err(e) => map_data_error(&messages, &admin, &headers, e),
     }
 }
@@ -323,39 +328,6 @@ pub async fn rotate_secret(
 
 // ── フォームの共通表現・パース ────────────────────────────────────────────────
 
-struct FormValues {
-    app_name: String,
-    client_type: String,
-    redirect_uris: String,
-    scopes: String,
-    require_pkce: bool,
-    client_status: String,
-}
-
-impl FormValues {
-    fn default_new() -> Self {
-        Self {
-            app_name: String::new(),
-            client_type: "confidential".to_string(),
-            redirect_uris: String::new(),
-            scopes: "openid".to_string(),
-            require_pkce: true,
-            client_status: "ACTIVE".to_string(),
-        }
-    }
-
-    fn from_client(c: &ClientView) -> Self {
-        Self {
-            app_name: c.app_name.clone(),
-            client_type: c.client_type.clone(),
-            redirect_uris: c.redirect_uris.join("\n"),
-            scopes: c.scopes.join(" "),
-            require_pkce: c.require_pkce,
-            client_status: c.client_status.clone(),
-        }
-    }
-}
-
 fn parse_uris(raw: &str) -> Vec<String> {
     raw.split_whitespace().map(str::to_string).collect()
 }
@@ -388,80 +360,50 @@ fn csrf_valid(headers: &HeaderMap, submitted: &str) -> bool {
 // ── レンダリング ──────────────────────────────────────────────────────────────
 
 fn render_list(messages: &Messages, admin: &str, clients: &[ClientView]) -> String {
-    let heading = escape(&messages.get("admin-clients-title"));
-    let new_label = escape(&messages.get("admin-clients-new"));
-    let body = if clients.is_empty() {
-        format!("<p>{}</p>", escape(&messages.get("admin-clients-none")))
-    } else {
-        let rows: String = clients
-            .iter()
-            .map(|c| {
-                format!(
-                    "<tr><td><a href=\"{path}/{id}\">{name}</a></td><td><code>{id}</code></td>\
-                     <td>{ctype}</td><td>{status}</td><td>{scopes}</td></tr>",
-                    path = CLIENTS_PATH,
-                    id = escape(&c.client_id),
-                    name = escape(&c.app_name),
-                    ctype = escape(&c.client_type),
-                    status = escape(&c.client_status),
-                    scopes = escape(&c.scopes.join(" ")),
-                )
-            })
-            .collect();
-        format!(
-            "<table>\n<thead><tr><th>{name}</th><th>{id}</th><th>{ctype}</th><th>{status}</th><th>{scopes}</th></tr></thead>\n\
-             <tbody>{rows}</tbody></table>",
-            name = escape(&messages.get("admin-client-col-name")),
-            id = escape(&messages.get("admin-client-col-id")),
-            ctype = escape(&messages.get("admin-client-col-type")),
-            status = escape(&messages.get("admin-client-col-status")),
-            scopes = escape(&messages.get("admin-client-col-scopes")),
-        )
-    };
-    let content = format!(
-        "<h2>{heading}</h2>\n<p><a href=\"{path}/new\">{new_label}</a></p>\n{body}",
-        path = CLIENTS_PATH,
-    );
-    render_layout(messages, Some(admin), &content)
+    render(&ClientsList {
+        messages,
+        admin: Some(admin),
+        clients,
+    })
 }
 
 fn render_new_form(
     messages: &Messages,
     admin: &str,
     csrf: &str,
-    values: &FormValues,
+    values: &ClientFormValues,
     error_key: Option<&str>,
 ) -> String {
     let error = error_key.map(|k| messages.get(k));
-    render_client_form(
+    render(&ClientForm {
         messages,
-        admin,
+        admin: Some(admin),
         csrf,
+        error: error.as_deref(),
+        heading: &messages.get("admin-clients-new"),
+        action: &format!("{CLIENTS_PATH}/new"),
+        is_new: true,
         values,
-        error.as_deref(),
-        &messages.get("admin-clients-new"),
-        &format!("{CLIENTS_PATH}/new"),
-        true,
-    )
+    })
 }
 
 fn render_new_form_with_message(
     messages: &Messages,
     admin: &str,
     csrf: &str,
-    values: &FormValues,
+    values: &ClientFormValues,
     error: &str,
 ) -> String {
-    render_client_form(
+    render(&ClientForm {
         messages,
-        admin,
+        admin: Some(admin),
         csrf,
+        error: Some(error),
+        heading: &messages.get("admin-clients-new"),
+        action: &format!("{CLIENTS_PATH}/new"),
+        is_new: true,
         values,
-        Some(error),
-        &messages.get("admin-clients-new"),
-        &format!("{CLIENTS_PATH}/new"),
-        true,
-    )
+    })
 }
 
 fn render_edit_form(
@@ -469,165 +411,28 @@ fn render_edit_form(
     admin: &str,
     client: &ClientView,
     csrf: &str,
-    values: &FormValues,
+    values: &ClientFormValues,
     error: Option<String>,
 ) -> String {
-    render_client_form(
+    render(&ClientForm {
         messages,
-        admin,
+        admin: Some(admin),
         csrf,
+        error: error.as_deref(),
+        heading: &format!("{}: {}", messages.get("admin-client-edit"), client.app_name),
+        action: &format!("{CLIENTS_PATH}/{}/edit", client.client_id),
+        is_new: false,
         values,
-        error.as_deref(),
-        &format!("{}: {}", messages.get("admin-client-edit"), client.app_name),
-        &format!("{CLIENTS_PATH}/{}/edit", client.client_id),
-        false,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-fn render_client_form(
-    messages: &Messages,
-    admin: &str,
-    csrf: &str,
-    values: &FormValues,
-    error: Option<&str>,
-    heading: &str,
-    action: &str,
-    is_new: bool,
-) -> String {
-    let error_html = error
-        .map(|e| format!("<p class=\"error\" role=\"alert\">{}</p>", escape(e)))
-        .unwrap_or_default();
-
-    let type_field = if is_new {
-        format!(
-            "<label>{label}<br>\n<select name=\"client_type\">\n\
-             <option value=\"confidential\"{c}>confidential</option>\n\
-             <option value=\"public\"{p}>public</option>\n</select></label>",
-            label = escape(&messages.get("admin-client-field-type")),
-            c = selected(values.client_type == "confidential"),
-            p = selected(values.client_type == "public"),
-        )
-    } else {
-        format!(
-            "<p>{label}: <code>{value}</code></p>",
-            label = escape(&messages.get("admin-client-field-type")),
-            value = escape(&values.client_type),
-        )
-    };
-
-    let pkce_field = if is_new {
-        format!(
-            "<label><input type=\"checkbox\" name=\"require_pkce\"{checked}> {label}</label>\
-             <small>{hint}</small>",
-            checked = if values.require_pkce { " checked" } else { "" },
-            label = escape(&messages.get("admin-client-field-pkce")),
-            hint = escape(&messages.get("admin-client-field-pkce-hint")),
-        )
-    } else {
-        String::new()
-    };
-
-    let status_field = if is_new {
-        String::new()
-    } else {
-        format!(
-            "<label>{label}<br>\n<select name=\"client_status\">\n\
-             <option value=\"ACTIVE\"{a}>ACTIVE</option>\n\
-             <option value=\"DISABLED\"{d}>DISABLED</option>\n</select></label>",
-            label = escape(&messages.get("admin-client-field-status")),
-            a = selected(values.client_status == "ACTIVE"),
-            d = selected(values.client_status == "DISABLED"),
-        )
-    };
-
-    let content = format!(
-        "<h2>{heading}</h2>\n{error_html}\n\
-         <form method=\"post\" action=\"{action}\">\n\
-         <input type=\"hidden\" name=\"csrf_token\" value=\"{csrf}\">\n\
-         <p><label>{name_label}<br>\n<input type=\"text\" name=\"app_name\" value=\"{app_name}\" required></label></p>\n\
-         <p>{type_field}</p>\n\
-         <p><label>{uris_label}<br>\n<textarea name=\"redirect_uris\" rows=\"4\" cols=\"60\">{uris}</textarea></label><br><small>{uris_hint}</small></p>\n\
-         <p><label>{scopes_label}<br>\n<input type=\"text\" name=\"scopes\" value=\"{scopes}\"></label><br><small>{scopes_hint}</small></p>\n\
-         <p>{status_field}</p>\n\
-         <p>{pkce_field}</p>\n\
-         <p><button type=\"submit\">{submit}</button> <a href=\"{path}\">{cancel}</a></p>\n\
-         </form>",
-        heading = escape(heading),
-        csrf = escape(csrf),
-        name_label = escape(&messages.get("admin-client-field-name")),
-        app_name = escape(&values.app_name),
-        uris_label = escape(&messages.get("admin-client-field-uris")),
-        uris = escape(&values.redirect_uris),
-        uris_hint = escape(&messages.get("admin-client-field-uris-hint")),
-        scopes_label = escape(&messages.get("admin-client-field-scopes")),
-        scopes = escape(&values.scopes),
-        scopes_hint = escape(&messages.get("admin-client-field-scopes-hint")),
-        submit = escape(&messages.get("admin-form-save")),
-        cancel = escape(&messages.get("admin-form-cancel")),
-        path = CLIENTS_PATH,
-    );
-    render_layout(messages, Some(admin), &content)
+    })
 }
 
 fn render_detail(messages: &Messages, admin: &str, client: &ClientView, csrf: &str) -> String {
-    let rotate = if client.client_type == "confidential" {
-        format!(
-            "<form method=\"post\" action=\"{path}/{id}/rotate-secret\">\
-             <input type=\"hidden\" name=\"csrf_token\" value=\"{csrf}\">\
-             <button type=\"submit\">{label}</button></form>",
-            path = CLIENTS_PATH,
-            id = escape(&client.client_id),
-            csrf = escape(csrf),
-            label = escape(&messages.get("admin-client-rotate-secret")),
-        )
-    } else {
-        String::new()
-    };
-
-    let content = format!(
-        "<h2>{name}</h2>\n\
-         <dl>\n\
-         <dt>{id_label}</dt><dd><code>{id}</code></dd>\n\
-         <dt>{type_label}</dt><dd>{ctype}</dd>\n\
-         <dt>{status_label}</dt><dd>{status}</dd>\n\
-         <dt>{auth_label}</dt><dd>{auth}</dd>\n\
-         <dt>{pkce_label}</dt><dd>{pkce}</dd>\n\
-         <dt>{uris_label}</dt><dd>{uris}</dd>\n\
-         <dt>{scopes_label}</dt><dd>{scopes}</dd>\n\
-         <dt>{grant_label}</dt><dd>{grants}</dd>\n\
-         <dt>{created_label}</dt><dd>{created}</dd>\n\
-         <dt>{updated_label}</dt><dd>{updated}</dd>\n\
-         </dl>\n\
-         <p><a href=\"{path}/{id}/edit\">{edit}</a> | <a href=\"{path}\">{back}</a></p>\n\
-         {rotate}",
-        name = escape(&client.app_name),
-        id_label = escape(&messages.get("admin-client-col-id")),
-        id = escape(&client.client_id),
-        type_label = escape(&messages.get("admin-client-col-type")),
-        ctype = escape(&client.client_type),
-        status_label = escape(&messages.get("admin-client-col-status")),
-        status = escape(&client.client_status),
-        auth_label = escape(&messages.get("admin-client-field-auth-method")),
-        auth = escape(&client.token_endpoint_auth_method),
-        pkce_label = escape(&messages.get("admin-client-field-pkce")),
-        pkce = if client.require_pkce { "true" } else { "false" },
-        uris_label = escape(&messages.get("admin-client-field-uris")),
-        uris = render_list_items(&client.redirect_uris),
-        scopes_label = escape(&messages.get("admin-client-col-scopes")),
-        scopes = escape(&client.scopes.join(" ")),
-        grant_label = escape(&messages.get("admin-client-field-grants")),
-        grants = escape(&client.grant_types.join(" ")),
-        created_label = escape(&messages.get("admin-client-field-created")),
-        created = escape(&client.created_at),
-        updated_label = escape(&messages.get("admin-client-field-updated")),
-        updated = escape(&client.updated_at),
-        path = CLIENTS_PATH,
-        edit = escape(&messages.get("admin-client-edit")),
-        back = escape(&messages.get("admin-client-back")),
-        rotate = rotate,
-    );
-    render_layout(messages, Some(admin), &content)
+    render(&ClientDetail {
+        messages,
+        admin: Some(admin),
+        client,
+        csrf,
+    })
 }
 
 fn render_secret_result(
@@ -666,50 +471,16 @@ fn render_secret_page(
     } else {
         messages.get("admin-client-secret-rotated-title")
     };
-    let secret_html = match secret {
-        Some(s) => format!(
-            "<p class=\"secret-warning\">{warn}</p>\n<p>{label}: <code>{secret}</code></p>",
-            warn = escape(&messages.get("admin-client-secret-warning")),
-            label = escape(&messages.get("admin-client-secret-label")),
-            secret = escape(s),
-        ),
-        None => format!("<p>{}</p>", escape(&messages.get("admin-client-no-secret"))),
-    };
-    let content = format!(
-        "<h2>{heading}</h2>\n\
-         <p>{id_label}: <code>{id}</code></p>\n\
-         {secret_html}\n\
-         <p><a href=\"{path}/{id}\">{detail}</a> | <a href=\"{path}\">{back}</a></p>",
-        heading = escape(&heading),
-        id_label = escape(&messages.get("admin-client-col-id")),
-        id = escape(client_id),
-        path = CLIENTS_PATH,
-        detail = escape(&messages.get("admin-client-detail")),
-        back = escape(&messages.get("admin-client-back")),
-    );
-    render_layout(messages, Some(admin), &content)
-}
-
-fn render_list_items(items: &[String]) -> String {
-    if items.is_empty() {
-        return "-".to_string();
-    }
-    let lis: String = items
-        .iter()
-        .map(|i| format!("<li><code>{}</code></li>", escape(i)))
-        .collect();
-    format!("<ul>{lis}</ul>")
+    render(&ClientSecret {
+        messages,
+        admin: Some(admin),
+        heading: &heading,
+        client_id,
+        secret,
+    })
 }
 
 // ── レスポンスの共通ヘルパー ──────────────────────────────────────────────────
-
-fn selected(on: bool) -> &'static str {
-    if on {
-        " selected"
-    } else {
-        ""
-    }
-}
 
 fn locale(headers: &HeaderMap) -> Locale {
     Locale::from_accept_language(
@@ -720,22 +491,28 @@ fn locale(headers: &HeaderMap) -> Locale {
 }
 
 /// api の 401/403 を web の画面挙動へ写す（ログイン誘導 / 403 画面）。それ以外は 500。
-fn map_data_error(messages: &Messages, admin: &str, headers: &HeaderMap, e: AdminApiError) -> Response {
+fn map_data_error(
+    messages: &Messages,
+    admin: &str,
+    headers: &HeaderMap,
+    e: AdminApiError,
+) -> Response {
     match e {
         AdminApiError::Unauthorized => redirect_to_login(),
         AdminApiError::Forbidden => forbidden_response(headers),
         AdminApiError::NotFound => not_found(messages, admin),
         other => {
             tracing::error!(error = ?debug_error(&other), "admin client console data error");
-            let content = format!(
-                "<p class=\"error\" role=\"alert\">{}</p>",
-                escape(&messages.get("admin-error-internal"))
-            );
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Html(render_layout(messages, Some(admin), &content)),
-            )
-                .into_response()
+            let body = render(&ConsoleNotice {
+                messages,
+                admin: Some(admin),
+                heading: None,
+                message: &messages.get("admin-error-internal"),
+                is_error: true,
+                back_href: None,
+                back_label: "",
+            });
+            (StatusCode::INTERNAL_SERVER_ERROR, Html(body)).into_response()
         }
     }
 }
@@ -760,32 +537,29 @@ fn bad_request_page(messages: &Messages, admin: &str, error_key: &str) -> Respon
 }
 
 fn bad_request_page_msg(messages: &Messages, admin: &str, message: &str) -> Response {
-    let content = format!(
-        "<p class=\"error\" role=\"alert\">{}</p>\n<p><a href=\"{path}\">{back}</a></p>",
-        escape(message),
-        path = CLIENTS_PATH,
-        back = escape(&messages.get("admin-client-back")),
-    );
-    (
-        StatusCode::BAD_REQUEST,
-        Html(render_layout(messages, Some(admin), &content)),
-    )
-        .into_response()
+    let body = render(&ConsoleNotice {
+        messages,
+        admin: Some(admin),
+        heading: None,
+        message,
+        is_error: true,
+        back_href: Some(CLIENTS_PATH),
+        back_label: &messages.get("admin-client-back"),
+    });
+    (StatusCode::BAD_REQUEST, Html(body)).into_response()
 }
 
 fn not_found(messages: &Messages, admin: &str) -> Response {
-    let content = format!(
-        "<h2>{title}</h2>\n<p>{msg}</p>\n<p><a href=\"{path}\">{back}</a></p>",
-        title = escape(&messages.get("admin-client-not-found-title")),
-        msg = escape(&messages.get("admin-client-not-found-message")),
-        path = CLIENTS_PATH,
-        back = escape(&messages.get("admin-client-back")),
-    );
-    (
-        StatusCode::NOT_FOUND,
-        Html(render_layout(messages, Some(admin), &content)),
-    )
-        .into_response()
+    let body = render(&ConsoleNotice {
+        messages,
+        admin: Some(admin),
+        heading: Some(&messages.get("admin-client-not-found-title")),
+        message: &messages.get("admin-client-not-found-message"),
+        is_error: false,
+        back_href: Some(CLIENTS_PATH),
+        back_label: &messages.get("admin-client-back"),
+    });
+    (StatusCode::NOT_FOUND, Html(body)).into_response()
 }
 
 #[cfg(test)]
@@ -836,7 +610,8 @@ mod tests {
             updated_at: "2026-07-06T00:00:00Z".into(),
         };
         let html = render_list(&messages, "admin-1", &[client]);
-        assert!(html.contains("&lt;script&gt;Evil&lt;/script&gt;"));
+        // Askama は HTML を数値文字参照でエスケープする（`<` → `&#60;`）。生タグが残らないことを確認する。
+        assert!(html.contains("&#60;script&#62;Evil&#60;/script&#62;"));
         assert!(!html.contains("<script>Evil"));
     }
 }

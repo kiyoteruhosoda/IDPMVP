@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>{{ messages.get("admin-console-title") }}</title></head>
+<body>
+{% if let Some(uid) = admin %}
+<header class="admin-header">
+<span class="admin-title">{{ messages.get("admin-console-title") }}</span>
+<span class="admin-user">{{ messages.get("admin-signed-in-as") }}: {{ uid }}</span>
+<form method="post" action="/admin/console/logout" class="admin-logout"><button type="submit">{{ messages.get("admin-logout") }}</button></form>
+</header>
+{% else %}
+<header class="admin-header"><span class="admin-title">{{ messages.get("admin-console-title") }}</span></header>
+{% endif %}
+<main>
+{% block content %}{% endblock %}
+</main>
+</body>
+</html>

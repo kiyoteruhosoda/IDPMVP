@@ -2,8 +2,8 @@
 
 use crate::presentation::correlation;
 use crate::presentation::handlers::{
-    admin, admin_audit, admin_clients, admin_permissions, admin_users, authorize, discovery, health,
-    internal_auth, register, token, userinfo,
+    admin, admin_audit, admin_clients, admin_permissions, admin_users, authorize, discovery,
+    health, internal_auth, register, token, userinfo,
 };
 use crate::presentation::openapi::ApiDoc;
 use crate::presentation::state::AppState;
@@ -62,10 +62,7 @@ pub fn build(state: AppState) -> Router {
             "/admin/permissions",
             get(admin_permissions::list_available_permissions),
         )
-        .route(
-            "/admin/users",
-            get(admin_users::search_user),
-        )
+        .route("/admin/users", get(admin_users::search_user))
         .route("/admin/users/{user_id}", get(admin_users::get_user))
         // 利用者権限の付与・剥奪・参照（A2、ADR-0006）。idp.admin 必須。
         .route(

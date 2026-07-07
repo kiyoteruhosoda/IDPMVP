@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>{{ messages.get("admin-login-title") }}</title></head>
+<body>
+<h1>{{ messages.get("admin-login-title") }}</h1>
+{% if let Some(key) = error_key %}<p class="error" role="alert">{{ messages.get(key) }}</p>{% endif %}
+<form method="post" action="/admin/console/login">
+<input type="hidden" name="csrf_token" value="{{ csrf }}">
+<label>{{ messages.get("login-username") }} <input type="text" name="username" autocomplete="username" required></label>
+<label>{{ messages.get("login-password") }} <input type="password" name="password" autocomplete="current-password" required></label>
+<button type="submit">{{ messages.get("login-submit") }}</button>
+</form>
+</body>
+</html>
