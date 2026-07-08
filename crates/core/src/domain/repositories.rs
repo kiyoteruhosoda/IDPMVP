@@ -9,6 +9,7 @@ use crate::domain::audit::{AuditEvent, AuditLogEntry, AuditLogFilter};
 use crate::domain::auth_session::AuthSession;
 use crate::domain::authorization_code::AuthorizationCode;
 use crate::domain::client::Client;
+use crate::domain::consent::ClientConsent;
 use crate::domain::error::Result;
 use crate::domain::refresh_token::RefreshToken;
 use crate::domain::signing_key::SigningKey;
@@ -147,4 +148,17 @@ pub trait RefreshTokenRepository: Send + Sync {
     /// `parent_hash` でチェーンを検索し、存在する（未失効・失効問わず）場合は `true`。
     /// reuse detection で同一 parent から二重発行が起きていないかを確認するために使う。
     async fn exists_by_parent_hash(&self, parent_hash: &str) -> Result<bool>;
+}
+
+/// ユーザーがクライアントに付与した同意済み scope の永続化（F3: Consent）。
+#[async_trait]
+pub trait ClientConsentRepository: Send + Sync {
+    /// `(user_id, client_id)` の同意レコードを返す。存在しなければ `None`。
+    async fn find(&self, user_id: Uuid, client_id: &str) -> Result<Option<ClientConsent>>;
+    /// 同意レコードを UPSERT する（scope が変わった場合は上書き）。
+    async fn upsert(&self, consent: &ClientConsent) -> Result<()>;
+    /// 同意を取り消す（存在しなければ冪等に何もしない）。
+    async fn revoke(&self, user_id: Uuid, client_id: &str) -> Result<()>;
+    /// ユーザーの全同意レコードを返す（同意取り消し画面・管理用）。
+    async fn list_for_user(&self, user_id: Uuid) -> Result<Vec<ClientConsent>>;
 }

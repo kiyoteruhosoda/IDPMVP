@@ -7,6 +7,7 @@ pub mod admin_permissions;
 pub mod admin_signing_keys;
 pub mod admin_users;
 pub mod authorize;
+pub mod consent;
 pub mod discovery;
 pub mod health;
 pub mod internal_auth;

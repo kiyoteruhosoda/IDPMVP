@@ -4,6 +4,7 @@ pub mod audit_log;
 pub mod auth_session;
 pub mod authorization_code;
 pub mod client;
+pub mod consent;
 pub mod refresh_token;
 pub mod signing_key;
 pub mod sso_session;

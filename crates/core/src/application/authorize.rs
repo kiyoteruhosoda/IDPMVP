@@ -2,6 +2,7 @@
 //!
 //! 認可リクエストを検証し、SSO セッションがあれば再ログインなしで code を発行、
 //! なければ AuthSession を作成して `/login` へ誘導する。
+//! F3 で `prompt` / `max_age` 対応、同意チェックを追加した。
 //!
 //! エラー方針: `client_id` / `redirect_uri` が無効な場合はリダイレクトせず、
 //! それ以外のエラーは `redirect_uri` にエラーコードを付与して返す。
@@ -14,7 +15,8 @@ use crate::domain::client::Client;
 use crate::domain::clock::Clock;
 use crate::domain::error::OAuthErrorCode;
 use crate::domain::repositories::{
-    AuthSessionRepository, ClientRepository, SsoSessionRepository, UserRepository,
+    AuthSessionRepository, ClientConsentRepository, ClientRepository, SsoSessionRepository,
+    UserRepository,
 };
 use crate::domain::values::{CodeChallengeMethod, Scope};
 use crate::infrastructure::crypto;
@@ -34,13 +36,20 @@ pub struct AuthorizeRequest {
     pub code_challenge_method: Option<String>,
     /// SSO Cookie（`sso_session_id`）の値。
     pub sso_session_id: Option<String>,
+    /// `prompt` パラメータ（`none` / `login` / `consent`）。
+    pub prompt: Option<String>,
+    /// `max_age` パラメータ（秒）。
+    pub max_age: Option<u64>,
 }
 
 pub enum AuthorizeOutcome {
-    /// SSO 復元により code 発行済み。`redirect_uri?code=...&state=...` へ 302。
+    /// SSO 復元または同意済みにより code 発行済み。`redirect_uri?code=...&state=...` へ 302。
     Redirect { location: String },
     /// 認証が必要。AuthSession 作成済み。`auth_session_id` Cookie を発行して `/login` へ。
     LoginRequired { auth_session_id: String },
+    /// 同意が必要。AuthSession 作成済み（`authenticated_user_id` 設定済み）。`auth_session_id` Cookie
+    /// を発行して `/consent` へ。
+    ConsentRequired { auth_session_id: String },
     /// `redirect_uri` にエラーを付与して 302。
     ErrorRedirect { location: String },
     /// リダイレクト不可のエラー（client_id / redirect_uri が無効）。
@@ -55,6 +64,7 @@ pub struct AuthorizeService {
     users: Arc<dyn UserRepository>,
     auth_sessions: Arc<dyn AuthSessionRepository>,
     sso_sessions: Arc<dyn SsoSessionRepository>,
+    client_consents: Arc<dyn ClientConsentRepository>,
     code_issuance: Arc<CodeIssuanceService>,
     audit: Arc<AuditService>,
     clock: Arc<dyn Clock>,
@@ -69,6 +79,7 @@ impl AuthorizeService {
         users: Arc<dyn UserRepository>,
         auth_sessions: Arc<dyn AuthSessionRepository>,
         sso_sessions: Arc<dyn SsoSessionRepository>,
+        client_consents: Arc<dyn ClientConsentRepository>,
         code_issuance: Arc<CodeIssuanceService>,
         audit: Arc<AuditService>,
         clock: Arc<dyn Clock>,
@@ -80,6 +91,7 @@ impl AuthorizeService {
             users,
             auth_sessions,
             sso_sessions,
+            client_consents,
             code_issuance,
             audit,
             clock,
@@ -120,7 +132,7 @@ impl AuthorizeService {
         // 2. それ以外の検証（エラーは redirect_uri に付与して返す）。
         if let Err((error, description)) = validate_request(&req, &client) {
             return AuthorizeOutcome::ErrorRedirect {
-                location: error_redirect(redirect_uri, error, description, state),
+                location: error_redirect_with_state(redirect_uri, error, description, state),
             };
         }
 
@@ -135,43 +147,140 @@ impl AuthorizeService {
         let nonce = req.nonce.clone().expect("nonce validated above");
         let code_challenge = req.code_challenge.clone().expect("validated above");
 
-        // 3. SSO Cookie 確認。有効なら再ログインなしで code を発行する。
-        if let Some(session_id) = non_empty(req.sso_session_id.as_deref()) {
-            match self.try_resume_sso(session_id, ctx).await {
-                Ok(Some((user_id, auth_time))) => {
-                    let cmd = IssueCodeCommand {
-                        user_id,
-                        client_id: client.client_id.clone(),
-                        redirect_uri: redirect_uri.to_string(),
-                        scope,
-                        nonce,
-                        auth_time,
-                        code_challenge,
-                        code_challenge_method: CodeChallengeMethod::S256,
-                    };
-                    return match self.code_issuance.issue(cmd, ctx).await {
-                        Ok(code) => AuthorizeOutcome::Redirect {
-                            location: code_redirect(redirect_uri, &code, &state),
-                        },
-                        Err(e) => {
-                            tracing::error!(error = %e, "failed to issue authorization code");
-                            AuthorizeOutcome::ErrorRedirect {
-                                location: error_redirect(
-                                    redirect_uri,
-                                    OAuthErrorCode::ServerError,
-                                    "failed to issue authorization code",
-                                    Some(&state),
-                                ),
+        // `prompt` 解析。
+        let force_login = matches!(req.prompt.as_deref(), Some("login"));
+        let force_consent = matches!(req.prompt.as_deref(), Some("consent"));
+        let prompt_none = matches!(req.prompt.as_deref(), Some("none"));
+
+        // 3. SSO Cookie 確認。有効かつ `prompt=login` でなければ SSO 復元を試みる。
+        if !force_login {
+            if let Some(session_id) = non_empty(req.sso_session_id.as_deref()) {
+                match self.try_resume_sso(session_id, ctx).await {
+                    Ok(Some((user_id, auth_time))) => {
+                        // `max_age` チェック: auth_time から max_age 秒超過していれば再認証。
+                        let max_age_exceeded = req.max_age.map_or(false, |max_age| {
+                            let now = self.clock.now();
+                            let elapsed = now - auth_time;
+                            elapsed.num_seconds() > max_age as i64
+                        });
+
+                        if max_age_exceeded {
+                            if prompt_none {
+                                return AuthorizeOutcome::ErrorRedirect {
+                                    location: error_redirect_with_state(
+                                        redirect_uri,
+                                        OAuthErrorCode::LoginRequired,
+                                        "max_age exceeded, re-authentication required",
+                                        Some(&state),
+                                    ),
+                                };
                             }
+                            // max_age 超過 → ログインへ（SSO は復元しない）。
+                        } else {
+                            // 同意チェック（force_consent の場合は既存同意を無視）。
+                            if !force_consent {
+                                let consented = self
+                                    .check_consent(user_id, &client.client_id, &scope)
+                                    .await;
+                                if consented {
+                                    // 同意済み → code を発行する。
+                                    let cmd = IssueCodeCommand {
+                                        user_id,
+                                        client_id: client.client_id.clone(),
+                                        redirect_uri: redirect_uri.to_string(),
+                                        scope: scope.clone(),
+                                        nonce: nonce.clone(),
+                                        auth_time,
+                                        code_challenge: code_challenge.clone(),
+                                        code_challenge_method: CodeChallengeMethod::S256,
+                                    };
+                                    return match self.code_issuance.issue(cmd, ctx).await {
+                                        Ok(code) => AuthorizeOutcome::Redirect {
+                                            location: code_redirect(redirect_uri, &code, &state),
+                                        },
+                                        Err(e) => {
+                                            tracing::error!(
+                                                error = %e,
+                                                "failed to issue authorization code"
+                                            );
+                                            AuthorizeOutcome::ErrorRedirect {
+                                                location: error_redirect_with_state(
+                                                    redirect_uri,
+                                                    OAuthErrorCode::ServerError,
+                                                    "failed to issue authorization code",
+                                                    Some(&state),
+                                                ),
+                                            }
+                                        }
+                                    };
+                                }
+                            }
+
+                            // 未同意（または force_consent）。
+                            if prompt_none {
+                                // prompt=none では同意画面を出せないのでエラー。
+                                return AuthorizeOutcome::ErrorRedirect {
+                                    location: error_redirect_with_state(
+                                        redirect_uri,
+                                        OAuthErrorCode::ConsentRequired,
+                                        "consent required",
+                                        Some(&state),
+                                    ),
+                                };
+                            }
+
+                            // 同意画面へ: AuthSession を認証済み状態で作成する。
+                            let now = self.clock.now();
+                            let session = AuthSession {
+                                id: crypto::random_hex(32),
+                                client_id: client.client_id.clone(),
+                                redirect_uri: redirect_uri.to_string(),
+                                scope,
+                                state,
+                                nonce,
+                                code_challenge,
+                                code_challenge_method: CodeChallengeMethod::S256,
+                                authenticated_user_id: Some(user_id),
+                                auth_time: Some(auth_time),
+                                expires_at: now + self.auth_session_ttl,
+                                created_at: now,
+                                updated_at: now,
+                            };
+                            if let Err(e) = self.auth_sessions.create(&session).await {
+                                tracing::error!(error = %e, "failed to create consent session");
+                                return AuthorizeOutcome::ErrorRedirect {
+                                    location: error_redirect_with_state(
+                                        redirect_uri,
+                                        OAuthErrorCode::ServerError,
+                                        "failed to start consent",
+                                        Some(&session.state),
+                                    ),
+                                };
+                            }
+                            return AuthorizeOutcome::ConsentRequired {
+                                auth_session_id: session.id,
+                            };
                         }
-                    };
-                }
-                Ok(None) => {} // SSO なし・無効 → ログインへ。
-                Err(e) => {
-                    tracing::error!(error = %e, "failed to check SSO session");
-                    // SSO 確認失敗は致命ではない。ログインへフォールバックする。
+                    }
+                    Ok(None) => {} // SSO なし・無効 → ログインへ。
+                    Err(e) => {
+                        tracing::error!(error = %e, "failed to check SSO session");
+                        // SSO 確認失敗は致命ではない。ログインへフォールバックする。
+                    }
                 }
             }
+        }
+
+        // prompt=none でここに到達した場合は SSO なし → login_required。
+        if prompt_none {
+            return AuthorizeOutcome::ErrorRedirect {
+                location: error_redirect_with_state(
+                    redirect_uri,
+                    OAuthErrorCode::LoginRequired,
+                    "login required",
+                    Some(&state),
+                ),
+            };
         }
 
         // 4. AuthSession を作成して /login へ。
@@ -194,7 +303,7 @@ impl AuthorizeService {
         if let Err(e) = self.auth_sessions.create(&session).await {
             tracing::error!(error = %e, "failed to create auth session");
             return AuthorizeOutcome::ErrorRedirect {
-                location: error_redirect(
+                location: error_redirect_with_state(
                     redirect_uri,
                     OAuthErrorCode::ServerError,
                     "failed to start authorization",
@@ -205,6 +314,32 @@ impl AuthorizeService {
 
         AuthorizeOutcome::LoginRequired {
             auth_session_id: session.id,
+        }
+    }
+
+    /// 同意チェック: ユーザーがクライアントに対してすべての scope に同意済みか確認する。
+    async fn check_consent(
+        &self,
+        user_id: uuid::Uuid,
+        client_id: &str,
+        scope: &[String],
+    ) -> bool {
+        let scopes_without_openid: Vec<String> = scope
+            .iter()
+            .filter(|s| s.as_str() != "openid")
+            .cloned()
+            .collect();
+        // openid のみの場合は常に同意済みとみなす。
+        if scopes_without_openid.is_empty() {
+            return true;
+        }
+        match self.client_consents.find(user_id, client_id).await {
+            Ok(Some(consent)) => consent.covers(&scopes_without_openid),
+            Ok(None) => false,
+            Err(e) => {
+                tracing::error!(error = %e, "failed to check consent");
+                false
+            }
         }
     }
 
@@ -340,7 +475,8 @@ pub fn code_redirect(redirect_uri: &str, code: &str, state: &str) -> String {
 }
 
 /// `redirect_uri?error=...&error_description=...&state=...` を構築する。
-fn error_redirect(
+/// `redirect_uri?error=...&error_description=...&state=...` を構築する（state は省略可）。
+pub fn error_redirect_with_state(
     redirect_uri: &str,
     error: OAuthErrorCode,
     description: &str,
@@ -394,6 +530,8 @@ mod tests {
             code_challenge: Some("E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM".to_string()),
             code_challenge_method: Some("S256".to_string()),
             sso_session_id: None,
+            prompt: None,
+            max_age: None,
         }
     }
 
@@ -463,7 +601,7 @@ mod tests {
         assert!(location.contains("code=c+o%2Bde"));
         assert!(location.contains("state=st%26ate"));
 
-        let location = error_redirect(
+        let location = error_redirect_with_state(
             "https://client.example.com/cb",
             OAuthErrorCode::InvalidScope,
             "scope must include `openid`",

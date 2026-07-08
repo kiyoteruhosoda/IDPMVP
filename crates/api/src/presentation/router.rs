@@ -3,7 +3,7 @@
 use crate::presentation::correlation;
 use crate::presentation::handlers::{
     admin, admin_audit, admin_clients, admin_permissions, admin_signing_keys, admin_users,
-    authorize, discovery, health, internal_auth, register, token, userinfo,
+    authorize, consent, discovery, health, internal_auth, register, token, userinfo,
 };
 use crate::presentation::openapi::ApiDoc;
 use crate::presentation::security_headers::add_security_headers;
@@ -27,6 +27,19 @@ pub fn build(state: AppState) -> Router {
             post(internal_auth::authenticate_admin),
         )
         .route("/internal/logout", post(internal_auth::logout))
+        // 同意 API（F3: Consent）。
+        .route(
+            "/internal/consent-info",
+            get(consent::consent_info),
+        )
+        .route(
+            "/internal/consent/approve",
+            post(consent::consent_approve),
+        )
+        .route(
+            "/internal/consent/deny",
+            post(consent::consent_deny),
+        )
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),
             internal_auth::require_service_token,

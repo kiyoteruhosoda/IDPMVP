@@ -11,6 +11,7 @@ use crate::application::authorize::AuthorizeService;
 use crate::application::client_management::ClientManagementService;
 use crate::application::client_status::ClientStatusService;
 use crate::application::code_issuance::CodeIssuanceService;
+use crate::application::consent::ConsentService;
 use crate::application::key_service::KeyService;
 use crate::application::login::LoginService;
 use crate::application::permission_management::PermissionManagementService;
@@ -26,6 +27,7 @@ use crate::infrastructure::repositories::audit_log::{SqlxAuditLogQuery, SqlxAudi
 use crate::infrastructure::repositories::auth_session::SqlxAuthSessionRepository;
 use crate::infrastructure::repositories::authorization_code::SqlxAuthorizationCodeRepository;
 use crate::infrastructure::repositories::client::SqlxClientRepository;
+use crate::infrastructure::repositories::consent::SqlxClientConsentRepository;
 use crate::infrastructure::repositories::refresh_token::SqlxRefreshTokenRepository;
 use crate::infrastructure::repositories::signing_key::SqlxSigningKeyRepository;
 use crate::infrastructure::repositories::sso_session::SqlxSsoSessionRepository;
@@ -45,6 +47,7 @@ pub struct AppState {
     pub register: Arc<RegisterService>,
     pub authorize: Arc<AuthorizeService>,
     pub login: Arc<LoginService>,
+    pub consent: Arc<ConsentService>,
     pub token: Arc<TokenService>,
     pub userinfo: Arc<UserInfoService>,
     pub keys: Arc<KeyService>,
@@ -67,6 +70,7 @@ impl AppState {
         let refresh_tokens = Arc::new(SqlxRefreshTokenRepository::new(pool.clone()));
         let signing_keys = Arc::new(SqlxSigningKeyRepository::new(pool.clone()));
         let user_permissions = Arc::new(SqlxUserPermissionRepository::new(pool.clone()));
+        let client_consents = Arc::new(SqlxClientConsentRepository::new(pool.clone()));
         let audit_sink = Arc::new(SqlxAuditLogSink::new(pool.clone()));
         let audit_logs = Arc::new(SqlxAuditLogQuery::new(pool.clone()));
         let hasher = Arc::new(Argon2PasswordHasher::new());
@@ -98,6 +102,7 @@ impl AppState {
             users.clone(),
             auth_sessions.clone(),
             sso_sessions.clone(),
+            client_consents.clone(),
             code_issuance.clone(),
             audit.clone(),
             clock.clone(),
@@ -106,15 +111,24 @@ impl AppState {
         ));
         let login = Arc::new(LoginService::new(
             users.clone(),
-            auth_sessions,
+            auth_sessions.clone(),
             sso_sessions.clone(),
-            code_issuance,
+            client_consents.clone(),
+            code_issuance.clone(),
             hasher.clone(),
             rate_limiter.clone(),
             audit.clone(),
             clock.clone(),
             config.sso_idle_ttl(),
             config.sso_absolute_ttl(),
+        ));
+        let consent = Arc::new(ConsentService::new(
+            auth_sessions,
+            client_consents,
+            clients.clone(),
+            code_issuance,
+            audit.clone(),
+            clock.clone(),
         ));
         // 管理コンソールのログイン（ADR-0006 §6）。IP レート制限は通常ログインと同一の制限器を共有する。
         let admin_login = Arc::new(AdminLoginService::new(
@@ -180,6 +194,7 @@ impl AppState {
             register,
             authorize,
             login,
+            consent,
             token,
             userinfo,
             keys,

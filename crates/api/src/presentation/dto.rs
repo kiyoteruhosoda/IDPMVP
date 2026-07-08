@@ -31,6 +31,10 @@ pub struct AuthorizeParams {
     pub nonce: Option<String>,
     pub code_challenge: Option<String>,
     pub code_challenge_method: Option<String>,
+    /// `prompt` パラメータ（OIDC Core §3.1.2.1）: `none` / `login` / `consent` / `select_account`。
+    pub prompt: Option<String>,
+    /// `max_age` パラメータ（OIDC Core §3.1.2.1）: SSO セッションの auth_time からの最大経過秒数。
+    pub max_age: Option<u64>,
 }
 
 /// `POST /login` のフォームパラメータ（設計仕様 §4.3）。

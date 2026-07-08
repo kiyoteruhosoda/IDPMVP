@@ -30,9 +30,16 @@ pub struct InternalAuthenticateRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "result", rename_all = "snake_case")]
 pub enum InternalAuthenticateResponse {
-    /// 認証成功。`redirect_to`（code 付き RP URL）へ 302 し、`sso_session_id` を Cookie 化する。
+    /// 認証成功かつ同意済み。`redirect_to`（code 付き RP URL）へ 302 し、`sso_session_id` を Cookie 化する。
     Success {
         redirect_to: String,
+        sso_session_id: String,
+        sso_absolute_ttl_secs: u64,
+    },
+    /// 認証成功だが同意が必要。`auth_session_id` Cookie を発行して `/consent` へ 302 する。
+    /// `sso_session_id` も発行する（SSO Cookie をセットするため）。
+    ConsentRequired {
+        auth_session_id: String,
         sso_session_id: String,
         sso_absolute_ttl_secs: u64,
     },
@@ -93,6 +100,72 @@ pub enum InternalAdminAuthenticateResponse {
     Locked,
     /// 資格情報は正しいが `idp.admin` 権限を保有しない。
     Forbidden,
+    /// api 内部エラー。
+    Internal,
+}
+
+/// 同意画面情報 API（`GET /internal/consent-info`）のリクエスト。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InternalConsentInfoRequest {
+    pub auth_session_id: String,
+}
+
+/// 同意画面情報 API のレスポンス。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "result", rename_all = "snake_case")]
+pub enum InternalConsentInfoResponse {
+    /// セッションが有効。同意画面に必要な情報を返す。
+    Ok {
+        auth_session_id: String,
+        client_name: String,
+        client_id: String,
+        /// 同意を求めるスコープ（`openid` は除く）。
+        requested_scopes: Vec<String>,
+    },
+    /// AuthSession が無い・期限切れ・認証済みユーザー未設定（`/authorize` からやり直し）。
+    SessionExpired,
+}
+
+/// 同意承認 API（`POST /internal/consent/approve`）のリクエスト。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InternalConsentApproveRequest {
+    pub auth_session_id: String,
+    #[serde(default)]
+    pub ip_address: Option<String>,
+    #[serde(default)]
+    pub user_agent: Option<String>,
+}
+
+/// 同意承認 API のレスポンス。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "result", rename_all = "snake_case")]
+pub enum InternalConsentApproveResponse {
+    /// 同意付与・code 発行成功。`redirect_to`（code 付き RP URL）へ 302 する。
+    Success { redirect_to: String },
+    /// AuthSession が無い・期限切れ。
+    SessionExpired,
+    /// api 内部エラー。
+    Internal,
+}
+
+/// 同意拒否 API（`POST /internal/consent/deny`）のリクエスト。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InternalConsentDenyRequest {
+    pub auth_session_id: String,
+    #[serde(default)]
+    pub ip_address: Option<String>,
+    #[serde(default)]
+    pub user_agent: Option<String>,
+}
+
+/// 同意拒否 API のレスポンス。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "result", rename_all = "snake_case")]
+pub enum InternalConsentDenyResponse {
+    /// 拒否処理完了。`redirect_to`（`access_denied` エラー付き RP URL）へ 302 する。
+    Ok { redirect_to: String },
+    /// AuthSession が無い・期限切れ（RP へのリダイレクトができない）。
+    SessionExpired,
     /// api 内部エラー。
     Internal,
 }

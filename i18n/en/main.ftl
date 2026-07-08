@@ -138,3 +138,14 @@ admin-signing-keys-alg-label = Algorithm
 admin-signing-keys-generate-button = Generate
 admin-signing-keys-not-found-title = Signing key not found
 admin-signing-keys-not-found-message = The signing key you requested does not exist.
+
+# Consent screen (F3).
+consent-title = Allow access
+consent-intro = The following application is requesting access to your account:
+consent-approve = Allow
+consent-deny = Deny
+consent-error-session-expired = Your authorization session has expired. Please start over from the application.
+consent-error-csrf = The form has expired. Please reload the page and try again.
+consent-scope-profile = Profile information (name, picture)
+consent-scope-email = Email address
+consent-scope-offline_access = Keep you signed in (refresh tokens)

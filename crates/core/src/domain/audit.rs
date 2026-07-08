@@ -30,6 +30,9 @@ pub enum AuditEventType {
     RefreshTokenIssued,
     RefreshTokenUsed,
     RefreshTokenReuseDetected,
+    /// 同意の付与・取り消し（F3: Consent）。
+    ConsentGranted,
+    ConsentDenied,
 }
 
 impl AuditEventType {
@@ -55,6 +58,8 @@ impl AuditEventType {
             Self::RefreshTokenIssued => "refresh_token.issued",
             Self::RefreshTokenUsed => "refresh_token.used",
             Self::RefreshTokenReuseDetected => "refresh_token.reuse_detected",
+            Self::ConsentGranted => "consent.granted",
+            Self::ConsentDenied => "consent.denied",
         }
     }
 }

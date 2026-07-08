@@ -29,6 +29,12 @@ pub enum OAuthErrorCode {
     InvalidScope,
     AccessDenied,
     ServerError,
+    /// `prompt=none` でログインが必要な場合（OIDC Core 3.1.2.6）。
+    LoginRequired,
+    /// `prompt=none` で同意が必要な場合（OIDC Core 3.1.2.6）。
+    ConsentRequired,
+    /// `prompt=none` でインタラクションが必要な場合（OIDC Core 3.1.2.6）。
+    InteractionRequired,
 }
 
 impl OAuthErrorCode {
@@ -43,6 +49,9 @@ impl OAuthErrorCode {
             Self::InvalidScope => "invalid_scope",
             Self::AccessDenied => "access_denied",
             Self::ServerError => "server_error",
+            Self::LoginRequired => "login_required",
+            Self::ConsentRequired => "consent_required",
+            Self::InteractionRequired => "interaction_required",
         }
     }
 }

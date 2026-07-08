@@ -10,6 +10,7 @@ pub mod authorize;
 pub mod client_management;
 pub mod client_status;
 pub mod code_issuance;
+pub mod consent;
 pub mod key_service;
 pub mod login;
 pub mod permission_management;

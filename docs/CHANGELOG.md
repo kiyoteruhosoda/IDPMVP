@@ -366,3 +366,13 @@
   モジュール（環境変数 > 既定値、issuer 正規化・各種 TTL）、`tracing` の JSON 構造化ログ、sqlx の
   MariaDB 接続プール、起動時のスキーマ version 照合（`_sqlx_migrations` を SSOT とした fail-fast）、
   `/healthz`・`/readyz` ヘルスチェック、開発用 `docker-compose.yml`（MariaDB 10.11 / 任意 Redis）を実装。
+
+- **F3: Consent（同意画面・同意済み scope 記録、`prompt`/`max_age` 正式対応）**。
+  マイグレーション `0007_client_consents`（user_id×client_id の unique 制約付き JSON スコープ保持）を追加。
+  ドメイン層に `ClientConsent` エンティティ・`ClientConsentRepository` trait・監査イベント
+  `ConsentGranted`/`ConsentDenied` を追加。`AuthorizeRequest` に `prompt`/`max_age` フィールドを追加し、
+  `prompt=none`（インタラクション禁止）・`prompt=login`（強制再認証）・`max_age` 超過時の強制再認証を実装。
+  `ConsentRequired` を `AuthorizeOutcome`/`LoginOutcome` に追加し、SSO 再利用パスでも同意確認を行う。
+  `/internal/consent-info`・`/internal/consent-approve`・`/internal/consent-deny` の 3 エンドポイントを
+  api に追加。web 側に `/consent` 画面（Askama テンプレート、CSRF 保護付き POST）を追加。
+  i18n（en/ja）の同意画面文言を追加。

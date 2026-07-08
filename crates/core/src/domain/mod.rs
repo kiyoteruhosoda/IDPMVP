@@ -8,6 +8,7 @@ pub mod auth_session;
 pub mod authorization_code;
 pub mod client;
 pub mod clock;
+pub mod consent;
 pub mod error;
 pub mod password;
 pub mod permission;
