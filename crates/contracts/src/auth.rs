@@ -43,6 +43,11 @@ pub enum InternalAuthenticateResponse {
         sso_session_id: String,
         sso_absolute_ttl_secs: u64,
     },
+    /// パスワード認証成功だが MFA（TOTP）が設定済み。TOTP 入力画面 `/mfa/totp` へ誘導する。
+    /// `auth_session_id` Cookie はそのまま維持する（MFA 検証で使う）。
+    MfaRequired {
+        auth_session_id: String,
+    },
     /// AuthSession が無い・期限切れ（`/authorize` からやり直し）。
     SessionExpired,
     /// CSRF トークン不一致。
@@ -54,6 +59,101 @@ pub enum InternalAuthenticateResponse {
     /// アカウントロック中。
     Locked,
     /// api 内部エラー。
+    Internal,
+}
+
+/// TOTP セットアップ開始 API（`POST /internal/mfa/totp/setup`）のリクエスト。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InternalTotpSetupRequest {
+    /// SSO セッション Cookie の生値（web が転送）。
+    pub sso_session_id: String,
+    /// 認証アプリに表示するアカウント名（通常はメールアドレスまたはユーザー名）。
+    pub account_name: String,
+}
+
+/// TOTP セットアップ開始 API のレスポンス。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "result", rename_all = "snake_case")]
+pub enum InternalTotpSetupResponse {
+    /// セットアップ開始成功。QR URI と生シークレット（base32）を返す。
+    Ok {
+        /// `otpauth://totp/...` URI。QR コード生成に使う。
+        totp_uri: String,
+        /// base32 エンコードされたシークレット。QR が使えないユーザーへ直接表示する。
+        secret_base32: String,
+    },
+    /// すでに有効な TOTP が設定済み（再セットアップ不可。先に削除が必要）。
+    AlreadyConfigured,
+    /// SSO セッションが無い・期限切れ。
+    SessionExpired,
+    /// api 内部エラー。
+    Internal,
+}
+
+/// TOTP 確認 API（`POST /internal/mfa/totp/confirm`）のリクエスト。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InternalTotpConfirmRequest {
+    pub sso_session_id: String,
+    /// ユーザーが認証アプリから入力した 6 桁コード。
+    pub code: String,
+}
+
+/// TOTP 確認 API のレスポンス。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "result", rename_all = "snake_case")]
+pub enum InternalTotpConfirmResponse {
+    Ok,
+    InvalidCode,
+    NotFound,
+    AlreadyConfigured,
+    SessionExpired,
+    Internal,
+}
+
+/// TOTP 削除 API（`POST /internal/mfa/totp/delete`）のリクエスト。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InternalTotpDeleteRequest {
+    pub sso_session_id: String,
+}
+
+/// TOTP 削除 API のレスポンス。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "result", rename_all = "snake_case")]
+pub enum InternalTotpDeleteResponse {
+    Ok,
+    SessionExpired,
+    Internal,
+}
+
+/// ログイン TOTP 検証 API（`POST /internal/mfa/totp/verify`）のリクエスト。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InternalVerifyTotpRequest {
+    pub auth_session_id: Option<String>,
+    pub totp_code: String,
+    pub csrf_token: String,
+    #[serde(default)]
+    pub ip_address: Option<String>,
+    #[serde(default)]
+    pub user_agent: Option<String>,
+}
+
+/// ログイン TOTP 検証 API のレスポンス。成功系は `InternalAuthenticateResponse` と同等。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "result", rename_all = "snake_case")]
+pub enum InternalVerifyTotpResponse {
+    Success {
+        redirect_to: String,
+        sso_session_id: String,
+        sso_absolute_ttl_secs: u64,
+    },
+    ConsentRequired {
+        auth_session_id: String,
+        sso_session_id: String,
+        sso_absolute_ttl_secs: u64,
+    },
+    SessionExpired,
+    CsrfMismatch,
+    InvalidCode,
     Internal,
 }
 
@@ -169,3 +269,158 @@ pub enum InternalConsentDenyResponse {
     /// api 内部エラー。
     Internal,
 }
+
+// ─── Passkey（WebAuthn）登録 API ─────────────────────────────────────────────
+
+/// Passkey 登録開始 API（`POST /internal/passkey/register/begin`）のリクエスト。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InternalPasskeyRegisterBeginRequest {
+    /// SSO セッション Cookie の生値。
+    pub sso_session_id: String,
+    /// 認証器に表示するユーザー名（通常は email）。
+    pub user_name: String,
+}
+
+/// Passkey 登録開始 API のレスポンス。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "result", rename_all = "snake_case")]
+pub enum InternalPasskeyRegisterBeginResponse {
+    /// 開始成功。`challenge_id` を complete で使う。`options` を JS WebAuthn API に渡す。
+    Ok {
+        challenge_id: String,
+        options: serde_json::Value,
+    },
+    /// SSO セッションが無い・期限切れ。
+    SessionExpired,
+    /// api 内部エラー。
+    Internal,
+}
+
+/// Passkey 登録完了 API（`POST /internal/passkey/register/complete`）のリクエスト。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InternalPasskeyRegisterCompleteRequest {
+    pub sso_session_id: String,
+    pub challenge_id: String,
+    /// ユーザーが付けたデバイス名（例: "MacBook Touch ID"）。
+    pub name: String,
+    /// ブラウザの `navigator.credentials.create()` が返したオブジェクト（JSON）。
+    pub credential: serde_json::Value,
+}
+
+/// Passkey 登録完了 API のレスポンス。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "result", rename_all = "snake_case")]
+pub enum InternalPasskeyRegisterCompleteResponse {
+    /// 登録成功。`credential_id` は管理画面表示用。
+    Ok { credential_id: String },
+    /// チャレンジが見つからない・期限切れ。
+    ChallengeNotFound,
+    /// クレデンシャルが無効。
+    InvalidCredential,
+    /// 同一デバイスが既に登録済み。
+    DuplicateCredential,
+    /// SSO セッションが無い・期限切れ。
+    SessionExpired,
+    /// api 内部エラー。
+    Internal,
+}
+
+/// Passkey 削除 API（`POST /internal/passkey/delete`）のリクエスト。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InternalPasskeyDeleteRequest {
+    pub sso_session_id: String,
+    /// 削除対象の内部 UUID（`InternalPasskeyRegisterCompleteResponse::Ok.credential_id`）。
+    pub credential_id: String,
+}
+
+/// Passkey 削除 API のレスポンス。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "result", rename_all = "snake_case")]
+pub enum InternalPasskeyDeleteResponse {
+    Ok,
+    SessionExpired,
+    Internal,
+}
+
+/// Passkey 一覧 API（`POST /internal/passkey/list`）のリクエスト。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InternalPasskeyListRequest {
+    pub sso_session_id: String,
+}
+
+/// 登録済みクレデンシャルの概要。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PasskeyCredentialInfo {
+    pub id: String,
+    pub name: String,
+    pub created_at: String,
+    pub last_used_at: Option<String>,
+}
+
+/// Passkey 一覧 API のレスポンス。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "result", rename_all = "snake_case")]
+pub enum InternalPasskeyListResponse {
+    Ok { credentials: Vec<PasskeyCredentialInfo> },
+    SessionExpired,
+    Internal,
+}
+
+// ─── Passkey（WebAuthn）認証 API ─────────────────────────────────────────────
+
+/// Passkey 認証開始 API（`POST /internal/passkey/login/begin`）のリクエスト。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InternalPasskeyLoginBeginRequest {
+    /// OIDC フローの auth_session_id（Cookie 値）。complete で OIDC フローを継続するために必要。
+    pub auth_session_id: Option<String>,
+}
+
+/// Passkey 認証開始 API のレスポンス。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "result", rename_all = "snake_case")]
+pub enum InternalPasskeyLoginBeginResponse {
+    /// 開始成功。`challenge_id` を complete で使う。`options` を JS WebAuthn API に渡す。
+    Ok {
+        challenge_id: String,
+        options: serde_json::Value,
+    },
+    /// api 内部エラー。
+    Internal,
+}
+
+/// Passkey 認証完了 API（`POST /internal/passkey/login/complete`）のリクエスト。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InternalPasskeyLoginCompleteRequest {
+    pub challenge_id: String,
+    /// ブラウザの `navigator.credentials.get()` が返したオブジェクト（JSON）。
+    pub credential: serde_json::Value,
+    #[serde(default)]
+    pub ip_address: Option<String>,
+    #[serde(default)]
+    pub user_agent: Option<String>,
+}
+
+/// Passkey 認証完了 API のレスポンス。成功系は `InternalAuthenticateResponse` と同等。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "result", rename_all = "snake_case")]
+pub enum InternalPasskeyLoginCompleteResponse {
+    Success {
+        redirect_to: String,
+        sso_session_id: String,
+        sso_absolute_ttl_secs: u64,
+    },
+    ConsentRequired {
+        auth_session_id: String,
+        sso_session_id: String,
+        sso_absolute_ttl_secs: u64,
+    },
+    /// チャレンジが見つからない・期限切れ。
+    ChallengeNotFound,
+    /// AuthSession が無い・期限切れ。
+    SessionExpired,
+    /// クレデンシャルが無効。
+    InvalidCredential,
+    /// api 内部エラー。
+    Internal,
+}
+

@@ -11,12 +11,15 @@ use crate::domain::authorization_code::AuthorizationCode;
 use crate::domain::client::Client;
 use crate::domain::consent::ClientConsent;
 use crate::domain::error::Result;
+use crate::domain::passkey_challenge::PasskeyChallenge;
 use crate::domain::refresh_token::RefreshToken;
 use crate::domain::revoked_access_token::RevokedAccessToken;
 use crate::domain::signing_key::SigningKey;
 use crate::domain::sso_session::SsoSession;
+use crate::domain::totp_secret::TotpSecret;
 use crate::domain::user::User;
 use crate::domain::values::SigningKeyStatus;
+use crate::domain::webauthn_credential::WebAuthnCredential;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
@@ -60,6 +63,13 @@ pub trait AuthSessionRepository: Send + Sync {
         id: &str,
         user_id: Uuid,
         auth_time: DateTime<Utc>,
+    ) -> Result<()>;
+    /// パスワード検証成功後に MFA pending 状態を記録する（`password_verified_at` を設定）。
+    async fn set_password_verified(
+        &self,
+        id: &str,
+        user_id: Uuid,
+        verified_at: DateTime<Utc>,
     ) -> Result<()>;
     async fn delete(&self, id: &str) -> Result<()>;
 }
@@ -181,4 +191,60 @@ pub trait RevokedAccessTokenRepository: Send + Sync {
     ) -> Result<()>;
     /// 指定 jti が失効リストに存在するか。
     async fn is_revoked(&self, jti: &str) -> Result<bool>;
+}
+
+/// ユーザーの TOTP シークレット（MFA 自己登録）。
+///
+/// `confirmed_at IS NULL` = 仮登録中（QR 確認未完了）。
+/// `confirmed_at IS NOT NULL` = 有効化済み（ログイン時に TOTP 検証が必要）。
+#[async_trait]
+pub trait TotpSecretRepository: Send + Sync {
+    /// TOTP シークレットを保存する。既存の場合は上書き（UPSERT）する。
+    async fn upsert(&self, secret: &TotpSecret) -> Result<()>;
+    /// ユーザーの TOTP シークレットを返す（仮登録中・有効化済みを問わない）。
+    async fn find_by_user_id(&self, user_id: Uuid) -> Result<Option<TotpSecret>>;
+    /// 確認コードを検証後、`confirmed_at` を設定して有効化する。
+    async fn confirm(&self, user_id: Uuid, confirmed_at: DateTime<Utc>) -> Result<()>;
+    /// ユーザーの TOTP シークレットを削除する（冪等: 不存在でもエラーにしない）。
+    async fn delete(&self, user_id: Uuid) -> Result<()>;
+}
+
+/// ユーザーの WebAuthn（FIDO2 Passkey）クレデンシャル。
+///
+/// 1 ユーザーが複数デバイスを登録できる（ユーザー × デバイスの 1:N 関係）。
+/// 認証時は `credential_id` でクレデンシャルを特定し、`passkey_json` を `webauthn-rs` に渡す。
+#[async_trait]
+pub trait WebAuthnCredentialRepository: Send + Sync {
+    /// クレデンシャルを新規登録する。`credential_id` 重複は `Conflict`。
+    async fn create(&self, cred: &WebAuthnCredential) -> Result<()>;
+    /// 内部 UUID で検索する。
+    async fn find_by_id(&self, id: Uuid) -> Result<Option<WebAuthnCredential>>;
+    /// WebAuthn credential ID（base64url）で検索する（認証レスポンスからの逆引き用）。
+    async fn find_by_credential_id(&self, credential_id: &str) -> Result<Option<WebAuthnCredential>>;
+    /// ユーザーの全クレデンシャルを作成日時昇順で返す。
+    async fn list_by_user_id(&self, user_id: Uuid) -> Result<Vec<WebAuthnCredential>>;
+    /// sign_count と last_used_at を更新し、passkey_json（webauthn-rs による更新後の全体）も保存する。
+    async fn update_passkey(
+        &self,
+        id: Uuid,
+        passkey_json: &str,
+        last_used_at: DateTime<Utc>,
+    ) -> Result<()>;
+    /// クレデンシャルを削除する。所有者チェック（`user_id` 照合）も行う。不存在は冪等に無視する。
+    async fn delete(&self, id: Uuid, user_id: Uuid) -> Result<()>;
+}
+
+/// Passkey チャレンジ一時テーブル（WebAuthn の begin → complete 中間状態）。
+///
+/// `expires_at` を過ぎたレコードはアプリケーション層が削除する。
+#[async_trait]
+pub trait PasskeyChallengeRepository: Send + Sync {
+    /// チャレンジを保存する。
+    async fn create(&self, challenge: &PasskeyChallenge) -> Result<()>;
+    /// ID でチャレンジを取得する。不存在は `None`。
+    async fn find_by_id(&self, id: Uuid) -> Result<Option<PasskeyChallenge>>;
+    /// チャレンジを消費（削除）する（complete ステップで使用後に呼ぶ）。
+    async fn delete(&self, id: Uuid) -> Result<()>;
+    /// 期限切れのチャレンジをまとめて削除する（定期クリーンアップ用）。
+    async fn delete_expired(&self, now: DateTime<Utc>) -> Result<()>;
 }

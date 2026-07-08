@@ -11,6 +11,7 @@ use crate::admin_dto::{AuditLogView, ClientView, SigningKeyView};
 use crate::i18n::Messages;
 use askama::Template;
 use idp_contracts::admin::{ClientStatusResponse, UserSummaryResponse};
+use idp_contracts::auth::PasskeyCredentialInfo;
 
 /// テンプレートを描画して HTML 文字列を返す。描画エラー（実質 fmt エラーのみ）は握りつぶさず
 /// ログに残し、最小限のエラーページへフォールバックする（フェイルソフト）。
@@ -21,7 +22,27 @@ pub fn render<T: Template>(template: &T) -> String {
     })
 }
 
-/// 利用者ログイン画面（`GET /login`）。
+/// TOTP セットアップ画面（`GET /account/mfa/totp/setup`）。
+/// QR コード SVG と生シークレット（base32）を両方表示する（QR が使えないユーザー向け）。
+#[derive(Template)]
+#[template(path = "mfa_totp_setup.html")]
+pub struct TotpSetupTemplate<'a> {
+    pub messages: &'a Messages,
+    /// QR コードの SVG 文字列（インライン埋め込み）。
+    pub qr_svg: &'a str,
+    /// base32 エンコードされた生シークレット（QR が使えないユーザー向けに直接表示）。
+    pub secret_base32: &'a str,
+    pub error_key: Option<&'a str>,
+}
+
+/// ログインフロー TOTP 入力ページ（`GET /mfa/totp`）。
+#[derive(Template)]
+#[template(path = "mfa_totp_verify.html")]
+pub struct TotpVerifyTemplate<'a> {
+    pub messages: &'a Messages,
+    pub csrf: &'a str,
+    pub error_key: Option<&'a str>,
+}
 #[derive(Template)]
 #[template(path = "login.html")]
 pub struct LoginTemplate<'a> {
@@ -227,4 +248,20 @@ pub struct SigningKeysList<'a> {
     pub keys: &'a [SigningKeyView],
     pub csrf: &'a str,
     pub error: Option<&'a str>,
+}
+
+/// Passkey 一覧画面（`GET /account/passkey`）。登録済みクレデンシャルの一覧と削除ボタン。
+#[derive(Template)]
+#[template(path = "passkey_list.html")]
+pub struct PasskeyListTemplate<'a> {
+    pub messages: &'a Messages,
+    pub credentials: &'a [PasskeyCredentialInfo],
+}
+
+/// Passkey 登録画面（`GET /account/passkey/register`）。WebAuthn JS フローを起動する。
+#[derive(Template)]
+#[template(path = "passkey_register.html")]
+pub struct PasskeyRegisterTemplate<'a> {
+    pub messages: &'a Messages,
+    pub error_key: Option<&'a str>,
 }
