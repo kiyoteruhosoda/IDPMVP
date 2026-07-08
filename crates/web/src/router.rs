@@ -3,7 +3,7 @@
 use crate::correlation;
 use crate::handlers::{
     admin_clients_console, admin_console, admin_signing_keys_console, admin_status_console,
-    admin_users_console, health, login,
+    admin_users_console, consent, health, login,
 };
 use crate::state::WebState;
 use axum::routing::{get, post};
@@ -15,6 +15,8 @@ pub fn build(state: WebState) -> Router {
         .route("/healthz", get(health::liveness))
         .route("/readyz", get(health::readiness))
         .route("/login", get(login::login_page).post(login::login))
+        // 同意画面（F3: Consent）。
+        .route("/consent", get(consent::consent_page).post(consent::consent))
         // 管理コンソール（ADR-0006 §6・ADR-0007 §4）。ログインはクライアント不要。
         .route(
             "/admin/console/login",

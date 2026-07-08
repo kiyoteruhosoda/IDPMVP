@@ -3,10 +3,13 @@
 use crate::presentation::correlation;
 use crate::presentation::handlers::{
     admin, admin_audit, admin_clients, admin_permissions, admin_signing_keys, admin_users,
-    authorize, discovery, health, internal_auth, register, token, userinfo,
+    authorize, consent, discovery, health, internal_auth, introspect, logout, register, revoke,
+    token, userinfo,
 };
 use crate::presentation::openapi::ApiDoc;
+use crate::presentation::security_headers::add_security_headers;
 use crate::presentation::state::AppState;
+use axum::middleware;
 use axum::routing::{get, post};
 use axum::Router;
 use tower_http::trace::TraceLayer;
@@ -14,6 +17,7 @@ use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
 pub fn build(state: AppState) -> Router {
+    let hsts_max_age = state.config.hsts_max_age();
     // 内部認証 API（ADR-0007 §3・§5）。web（将来）→api のサービス間 I/F。外部公開しない
     // （リバースプロキシで /internal/* を遮断する前提）。多層防御としてサービス認証トークン
     // （X-Internal-Auth-Token）を必須にする route_layer をこのサブルータにのみ付ける。
@@ -24,6 +28,19 @@ pub fn build(state: AppState) -> Router {
             post(internal_auth::authenticate_admin),
         )
         .route("/internal/logout", post(internal_auth::logout))
+        // 同意 API（F3: Consent）。
+        .route(
+            "/internal/consent-info",
+            get(consent::consent_info),
+        )
+        .route(
+            "/internal/consent/approve",
+            post(consent::consent_approve),
+        )
+        .route(
+            "/internal/consent/deny",
+            post(consent::consent_deny),
+        )
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),
             internal_auth::require_service_token,
@@ -36,6 +53,9 @@ pub fn build(state: AppState) -> Router {
         .route("/authorize", get(authorize::authorize))
         .route("/token", post(token::token))
         .route("/userinfo", get(userinfo::userinfo))
+        .route("/logout", get(logout::logout))
+        .route("/revoke", post(revoke::revoke))
+        .route("/introspect", post(introspect::introspect))
         // 管理者身元確認（idp.admin 必須。RequirePerms<IdpAdmin>）。web の管理コンソールが SSO Cookie
         // 転送で認証状態・身元を得るのに使う（ADR-0007 §4）。HTML 画面は web crate 側にある。
         .route("/admin/whoami", get(admin::whoami))
@@ -97,5 +117,8 @@ pub fn build(state: AppState) -> Router {
         .merge(SwaggerUi::new("/api/docs").url("/api/openapi.json", ApiDoc::openapi()))
         .layer(axum::middleware::from_fn(correlation::propagate))
         .layer(TraceLayer::new_for_http())
+        .layer(middleware::from_fn(move |req, next| {
+            add_security_headers(req, next, hsts_max_age)
+        }))
         .with_state(state)
 }

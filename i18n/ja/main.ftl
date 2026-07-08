@@ -138,3 +138,14 @@ admin-signing-keys-alg-label = アルゴリズム
 admin-signing-keys-generate-button = 生成
 admin-signing-keys-not-found-title = 署名鍵が見つかりません
 admin-signing-keys-not-found-message = 指定された署名鍵は存在しません。
+
+# 同意画面（F3）。
+consent-title = アクセスの許可
+consent-intro = 次のアプリケーションがあなたのアカウントへのアクセスを求めています：
+consent-approve = 許可する
+consent-deny = 拒否する
+consent-error-session-expired = 認可セッションの有効期限が切れました。アプリケーションから最初からやり直してください。
+consent-error-csrf = フォームの有効期限が切れました。ページを再読み込みして再試行してください。
+consent-scope-profile = プロフィール情報（名前・画像）
+consent-scope-email = メールアドレス
+consent-scope-offline_access = サインイン状態を維持する（リフレッシュトークン）

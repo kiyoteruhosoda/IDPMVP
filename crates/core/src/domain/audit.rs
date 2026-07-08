@@ -26,6 +26,13 @@ pub enum AuditEventType {
     ClientRegistered,
     ClientUpdated,
     ClientSecretRotated,
+    /// Refresh Token の発行・使用（rotation 成功）・再利用検知（設計仕様 §9.1）。
+    RefreshTokenIssued,
+    RefreshTokenUsed,
+    RefreshTokenReuseDetected,
+    /// 同意の付与・取り消し（F3: Consent）。
+    ConsentGranted,
+    ConsentDenied,
 }
 
 impl AuditEventType {
@@ -48,6 +55,11 @@ impl AuditEventType {
             Self::ClientRegistered => "client.registered",
             Self::ClientUpdated => "client.updated",
             Self::ClientSecretRotated => "client.secret_rotated",
+            Self::RefreshTokenIssued => "refresh_token.issued",
+            Self::RefreshTokenUsed => "refresh_token.used",
+            Self::RefreshTokenReuseDetected => "refresh_token.reuse_detected",
+            Self::ConsentGranted => "consent.granted",
+            Self::ConsentDenied => "consent.denied",
         }
     }
 }

@@ -30,6 +30,17 @@ pub struct LoginTemplate<'a> {
     pub error_key: Option<&'a str>,
 }
 
+/// 同意画面（`GET /consent`、F3）。
+#[derive(Template)]
+#[template(path = "consent.html")]
+pub struct ConsentTemplate<'a> {
+    pub messages: &'a Messages,
+    pub csrf: &'a str,
+    pub auth_session_id: &'a str,
+    pub client_name: &'a str,
+    pub requested_scopes: &'a [String],
+}
+
 /// タイトルと本文のみの最小ページ（ログインのエラー・権限不足など、共通レイアウトに載せない画面）。
 #[derive(Template)]
 #[template(path = "message_page.html")]

@@ -1,7 +1,10 @@
-//! トークン発行のユースケース（`POST /token`、設計仕様 §4.4・§5）。
+//! トークン発行のユースケース（`POST /token`、設計仕様 §4.4・§5・§9.1）。
 //!
-//! client 認証（confidential は `client_secret_basic`）→ code の原子的 one-time 消費 →
-//! 各種一致検証 → PKCE S256 検証 → ID Token / Access Token（RS256）発行。
+//! - `authorization_code` grant: client 認証 → code の原子的 one-time 消費 →
+//!   各種一致検証 → PKCE S256 検証 → ID Token / Access Token（RS256）発行。
+//!   scope に `offline_access` が含まれる場合は Refresh Token も発行する。
+//! - `refresh_token` grant: client 認証 → Refresh Token の検証 → rotation →
+//!   reuse detection → 新 Access Token / ID Token 発行。
 
 use crate::application::audit::{AuditService, RequestContext};
 use crate::application::key_service::KeyService;
@@ -11,7 +14,10 @@ use crate::domain::clock::Clock;
 use crate::domain::error::OAuthErrorCode;
 use crate::domain::password::PasswordHasher;
 use crate::domain::pkce;
-use crate::domain::repositories::{AuthorizationCodeRepository, ClientRepository, UserRepository};
+use crate::domain::refresh_token::RefreshToken;
+use crate::domain::repositories::{
+    AuthorizationCodeRepository, ClientRepository, RefreshTokenRepository, UserRepository,
+};
 use crate::domain::values::{ClientType, Scope, TokenEndpointAuthMethod};
 use crate::infrastructure::crypto;
 use crate::infrastructure::jwt;
@@ -61,6 +67,7 @@ pub fn userinfo_audience(issuer: &str) -> String {
 #[derive(Debug, Default)]
 pub struct TokenCommand {
     pub grant_type: Option<String>,
+    /// `authorization_code` grant 専用。
     pub code: Option<String>,
     pub redirect_uri: Option<String>,
     pub code_verifier: Option<String>,
@@ -68,6 +75,8 @@ pub struct TokenCommand {
     pub client_id: Option<String>,
     /// `Authorization: Basic` から取り出した `(client_id, client_secret)`。
     pub basic_credentials: Option<(String, String)>,
+    /// `refresh_token` grant 専用。
+    pub refresh_token: Option<String>,
 }
 
 /// トークンエンドポイントのエラー（RFC 6749 §5.2 形式で返す）。
@@ -91,12 +100,15 @@ pub struct IssuedTokens {
     pub id_token: String,
     pub expires_in: u64,
     pub scope: String,
+    /// `offline_access` scope が含まれる場合のみ発行する。
+    pub refresh_token: Option<String>,
 }
 
 pub struct TokenService {
     clients: Arc<dyn ClientRepository>,
     users: Arc<dyn UserRepository>,
     codes: Arc<dyn AuthorizationCodeRepository>,
+    refresh_tokens: Arc<dyn RefreshTokenRepository>,
     keys: Arc<KeyService>,
     hasher: Arc<dyn PasswordHasher>,
     audit: Arc<AuditService>,
@@ -104,6 +116,7 @@ pub struct TokenService {
     issuer: String,
     access_token_ttl: std::time::Duration,
     id_token_ttl: std::time::Duration,
+    refresh_token_ttl: std::time::Duration,
 }
 
 impl TokenService {
@@ -112,6 +125,7 @@ impl TokenService {
         clients: Arc<dyn ClientRepository>,
         users: Arc<dyn UserRepository>,
         codes: Arc<dyn AuthorizationCodeRepository>,
+        refresh_tokens: Arc<dyn RefreshTokenRepository>,
         keys: Arc<KeyService>,
         hasher: Arc<dyn PasswordHasher>,
         audit: Arc<AuditService>,
@@ -119,11 +133,13 @@ impl TokenService {
         issuer: String,
         access_token_ttl: std::time::Duration,
         id_token_ttl: std::time::Duration,
+        refresh_token_ttl: std::time::Duration,
     ) -> Self {
         Self {
             clients,
             users,
             codes,
+            refresh_tokens,
             keys,
             hasher,
             audit,
@@ -131,6 +147,7 @@ impl TokenService {
             issuer,
             access_token_ttl,
             id_token_ttl,
+            refresh_token_ttl,
         }
     }
 
@@ -139,50 +156,30 @@ impl TokenService {
         cmd: TokenCommand,
         ctx: &RequestContext,
     ) -> Result<IssuedTokens, TokenError> {
-        // 1. grant_type。
-        if cmd.grant_type.as_deref() != Some("authorization_code") {
-            return Err(TokenError::new(
+        match cmd.grant_type.as_deref() {
+            Some("authorization_code") => self.exchange_code(cmd, ctx).await,
+            Some("refresh_token") => self.exchange_refresh_token(cmd, ctx).await,
+            _ => Err(TokenError::new(
                 OAuthErrorCode::UnsupportedGrantType,
-                "grant_type must be `authorization_code`",
-            ));
+                "grant_type must be `authorization_code` or `refresh_token`",
+            )),
         }
+    }
 
-        // 2. client_id の決定（Basic ヘッダ優先。双方あって不一致なら invalid_request）。
-        let client_id = match (&cmd.basic_credentials, &cmd.client_id) {
-            (Some((basic_id, _)), Some(body_id)) if basic_id != body_id => {
-                return Err(TokenError::new(
-                    OAuthErrorCode::InvalidRequest,
-                    "client_id mismatch between Authorization header and body",
-                ));
-            }
-            (Some((basic_id, _)), _) => basic_id.clone(),
-            (None, Some(body_id)) if !body_id.is_empty() => body_id.clone(),
-            _ => {
-                return Err(TokenError::new(
-                    OAuthErrorCode::InvalidClient,
-                    "client authentication is required",
-                ));
-            }
-        };
+    /// `authorization_code` grant の処理。
+    async fn exchange_code(
+        &self,
+        cmd: TokenCommand,
+        ctx: &RequestContext,
+    ) -> Result<IssuedTokens, TokenError> {
+        // 1. client_id の決定（Basic ヘッダ優先）。
+        let client_id = resolve_client_id(&cmd)?;
 
-        // 3. client の存在・状態・認証。
-        let client = match self.clients.find_by_client_id(&client_id).await {
-            Ok(Some(c)) => c,
-            Ok(None) => {
-                return Err(self
-                    .client_auth_failed(&client_id, "unknown_client", ctx)
-                    .await);
-            }
-            Err(e) => return Err(internal(&e)),
-        };
-        if !client.is_active() {
-            return Err(self
-                .client_auth_failed(&client_id, "client_not_active", ctx)
-                .await);
-        }
+        // 2. client の存在・状態・認証。
+        let client = self.load_active_client(&client_id, ctx).await?;
         self.authenticate_client(&client, &cmd, ctx).await?;
 
-        // 4. code_verifier の形式検証（RFC 7636 §4.1）。
+        // 3. code_verifier の形式検証（RFC 7636 §4.1）。
         let Some(code_verifier) = cmd.code_verifier.as_deref().filter(|v| !v.is_empty()) else {
             return Err(TokenError::new(
                 OAuthErrorCode::InvalidRequest,
@@ -196,7 +193,7 @@ impl TokenService {
             ));
         }
 
-        // 5. code の原子的 one-time 消費（0 行 = 不存在・期限切れ・使用済み → invalid_grant）。
+        // 4. code の原子的 one-time 消費。
         let Some(code) = cmd.code.as_deref().filter(|c| !c.is_empty()) else {
             return Err(TokenError::new(
                 OAuthErrorCode::InvalidRequest,
@@ -235,7 +232,7 @@ impl TokenService {
             )
             .await;
 
-        // 6. client_id / redirect_uri の一致検証。
+        // 5. client_id / redirect_uri の一致検証。
         if auth_code.client_id != client_id {
             return Err(TokenError::new(
                 OAuthErrorCode::InvalidGrant,
@@ -249,7 +246,7 @@ impl TokenService {
             ));
         }
 
-        // 7. PKCE S256 検証。
+        // 6. PKCE S256 検証。
         if !pkce::verify_s256(code_verifier, &auth_code.code_challenge) {
             return Err(TokenError::new(
                 OAuthErrorCode::InvalidGrant,
@@ -257,28 +254,14 @@ impl TokenService {
             ));
         }
 
-        // 8. ユーザーの状態確認。
-        let user = match self.users.find_by_id(auth_code.user_id).await {
-            Ok(Some(u)) => u,
-            Ok(None) => {
-                return Err(TokenError::new(
-                    OAuthErrorCode::InvalidGrant,
-                    "user no longer exists",
-                ));
-            }
-            Err(e) => return Err(internal(&e)),
-        };
-        if !user.is_active() {
-            return Err(TokenError::new(
-                OAuthErrorCode::InvalidGrant,
-                "user is not active",
-            ));
-        }
+        // 7. ユーザーの状態確認。
+        let user = self.load_active_user(auth_code.user_id, ctx).await?;
 
-        // 9. トークン発行（scope は AuthorizationCodes.scope を引き継ぐ）。
-        let scope = auth_code.scope.join(" ");
-        let iat = now.timestamp();
+        // 8. トークン発行（scope は AuthorizationCodes.scope を引き継ぐ）。
+        let has_offline = auth_code.scope.iter().any(|v| v == Scope::OfflineAccess.as_str());
         let has = |s: Scope| auth_code.scope.iter().any(|v| v == s.as_str());
+        let scope_str = auth_code.scope.join(" ");
+        let iat = now.timestamp();
 
         let id_claims = IdTokenClaims {
             iss: self.issuer.clone(),
@@ -291,49 +274,52 @@ impl TokenService {
             jti: Uuid::new_v4().to_string(),
             email: has(Scope::Email).then(|| user.email.clone()),
             email_verified: has(Scope::Email).then_some(user.email_verified),
-            preferred_username: if has(Scope::Profile) {
-                user.preferred_username.clone()
-            } else {
-                None
-            },
-            name: if has(Scope::Profile) {
-                user.name.clone()
-            } else {
-                None
-            },
+            preferred_username: has(Scope::Profile).then(|| user.preferred_username.clone()).flatten(),
+            name: has(Scope::Profile).then(|| user.name.clone()).flatten(),
         };
         let access_claims = AccessTokenClaims {
             iss: self.issuer.clone(),
             sub: user.sub.to_string(),
             aud: userinfo_audience(&self.issuer),
             client_id: client_id.clone(),
-            scope: scope.clone(),
+            scope: scope_str.clone(),
             exp: iat + self.access_token_ttl.as_secs() as i64,
             iat,
             jti: Uuid::new_v4().to_string(),
         };
+        let id_token = self.sign_id_token(&id_claims).await?;
+        let access_token = self.sign_access_token(&access_claims).await?;
 
-        let signing_key = self
-            .keys
-            .active_signing_key()
-            .await
-            .map_err(|e| internal(&e))?;
-        let id_token = jwt::sign(
-            &signing_key.private_pem,
-            &signing_key.kid,
-            "JWT",
-            &signing_key.algorithm,
-            &id_claims,
-        )
-        .map_err(|e| internal(&e))?;
-        let access_token = jwt::sign(
-            &signing_key.private_pem,
-            &signing_key.kid,
-            "at+jwt",
-            &signing_key.algorithm,
-            &access_claims,
-        )
-        .map_err(|e| internal(&e))?;
+        // 9. Refresh Token 発行（offline_access scope のときのみ）。
+        let refresh_token_plain = if has_offline {
+            let plain = crypto::random_token(32);
+            let rt = RefreshToken {
+                token_hash: crypto::sha256_hex(&plain),
+                parent_hash: None,
+                user_id: auth_code.user_id,
+                client_id: client_id.clone(),
+                scope: auth_code.scope.clone(),
+                expires_at: now + chrono::Duration::from_std(self.refresh_token_ttl).unwrap(),
+                revoked_at: None,
+                created_at: now,
+            };
+            if let Err(e) = self.refresh_tokens.create(&rt).await {
+                return Err(internal(&e));
+            }
+            self.audit
+                .record(
+                    AuditEventType::RefreshTokenIssued,
+                    AuditResult::Success,
+                    Some(auth_code.user_id),
+                    Some(&client_id),
+                    None,
+                    ctx,
+                )
+                .await;
+            Some(plain)
+        } else {
+            None
+        };
 
         self.audit
             .record(
@@ -350,12 +336,202 @@ impl TokenService {
             access_token,
             id_token,
             expires_in: self.access_token_ttl.as_secs(),
-            scope,
+            scope: scope_str,
+            refresh_token: refresh_token_plain,
         })
     }
 
-    /// クライアント認証（設計仕様 §4.4）。confidential は `client_secret_basic` 必須、
-    /// public は認証なし（`token_endpoint_auth_method=none`）。
+    /// `refresh_token` grant の処理（rotation + reuse detection）。
+    async fn exchange_refresh_token(
+        &self,
+        cmd: TokenCommand,
+        ctx: &RequestContext,
+    ) -> Result<IssuedTokens, TokenError> {
+        // 1. client_id の決定・認証。
+        let client_id = resolve_client_id(&cmd)?;
+        let client = self.load_active_client(&client_id, ctx).await?;
+        self.authenticate_client(&client, &cmd, ctx).await?;
+
+        // 2. refresh_token パラメータの取り出し。
+        let Some(rt_plain) = cmd.refresh_token.as_deref().filter(|v| !v.is_empty()) else {
+            return Err(TokenError::new(
+                OAuthErrorCode::InvalidRequest,
+                "refresh_token is required",
+            ));
+        };
+        let rt_hash = crypto::sha256_hex(rt_plain);
+        let now = self.clock.now();
+
+        // 3. トークン検索。
+        let stored = match self.refresh_tokens.find_by_hash(&rt_hash).await {
+            Ok(Some(t)) => t,
+            Ok(None) => {
+                return Err(TokenError::new(
+                    OAuthErrorCode::InvalidGrant,
+                    "refresh_token not found",
+                ));
+            }
+            Err(e) => return Err(internal(&e)),
+        };
+
+        // 4. client_id 一致確認。
+        if stored.client_id != client_id {
+            return Err(TokenError::new(
+                OAuthErrorCode::InvalidGrant,
+                "refresh_token was issued to another client",
+            ));
+        }
+
+        // 5. reuse detection: すでに同じトークンから新トークンが発行済みなら全チェーン失効。
+        let already_rotated = match self.refresh_tokens.exists_by_parent_hash(&rt_hash).await {
+            Ok(v) => v,
+            Err(e) => return Err(internal(&e)),
+        };
+        if already_rotated {
+            // このトークンはすでに rotation 済み → 再利用攻撃の可能性。
+            // 旧トークンも失効させる（best-effort）。
+            let _ = self.refresh_tokens.revoke(&rt_hash, now).await;
+            self.audit
+                .record(
+                    AuditEventType::RefreshTokenReuseDetected,
+                    AuditResult::Failure,
+                    Some(stored.user_id),
+                    Some(&client_id),
+                    Some("refresh token already rotated"),
+                    ctx,
+                )
+                .await;
+            return Err(TokenError::new(
+                OAuthErrorCode::InvalidGrant,
+                "refresh_token has already been used",
+            ));
+        }
+
+        // 6. 有効性確認（失効・期限切れ）。
+        if !stored.is_valid_at(now) {
+            return Err(TokenError::new(
+                OAuthErrorCode::InvalidGrant,
+                "refresh_token is revoked or expired",
+            ));
+        }
+
+        // 7. ユーザーの状態確認。
+        let user = self.load_active_user(stored.user_id, ctx).await?;
+
+        // 8. 旧トークンを失効させる（rotation）。
+        if let Err(e) = self.refresh_tokens.revoke(&rt_hash, now).await {
+            return Err(internal(&e));
+        }
+
+        // 9. 新トークン発行。
+        let has = |s: Scope| stored.scope.iter().any(|v| v == s.as_str());
+        let scope_str = stored.scope.join(" ");
+        let iat = now.timestamp();
+
+        let id_claims = IdTokenClaims {
+            iss: self.issuer.clone(),
+            sub: user.sub.to_string(),
+            aud: client_id.clone(),
+            exp: iat + self.id_token_ttl.as_secs() as i64,
+            iat,
+            auth_time: iat, // refresh 時は現在時刻（再認証なし）
+            nonce: String::new(), // refresh grant では nonce は不要
+            jti: Uuid::new_v4().to_string(),
+            email: has(Scope::Email).then(|| user.email.clone()),
+            email_verified: has(Scope::Email).then_some(user.email_verified),
+            preferred_username: has(Scope::Profile).then(|| user.preferred_username.clone()).flatten(),
+            name: has(Scope::Profile).then(|| user.name.clone()).flatten(),
+        };
+        let access_claims = AccessTokenClaims {
+            iss: self.issuer.clone(),
+            sub: user.sub.to_string(),
+            aud: userinfo_audience(&self.issuer),
+            client_id: client_id.clone(),
+            scope: scope_str.clone(),
+            exp: iat + self.access_token_ttl.as_secs() as i64,
+            iat,
+            jti: Uuid::new_v4().to_string(),
+        };
+        let id_token = self.sign_id_token(&id_claims).await?;
+        let access_token = self.sign_access_token(&access_claims).await?;
+
+        // 10. 新 Refresh Token 発行（rotation）。
+        let new_rt_plain = crypto::random_token(32);
+        let new_rt = RefreshToken {
+            token_hash: crypto::sha256_hex(&new_rt_plain),
+            parent_hash: Some(rt_hash.clone()),
+            user_id: stored.user_id,
+            client_id: client_id.clone(),
+            scope: stored.scope.clone(),
+            expires_at: stored.expires_at, // TTL は引き継ぐ（スライドさせない）
+            revoked_at: None,
+            created_at: now,
+        };
+        if let Err(e) = self.refresh_tokens.create(&new_rt).await {
+            return Err(internal(&e));
+        }
+
+        self.audit
+            .record(
+                AuditEventType::RefreshTokenUsed,
+                AuditResult::Success,
+                Some(stored.user_id),
+                Some(&client_id),
+                None,
+                ctx,
+            )
+            .await;
+        self.audit
+            .record(
+                AuditEventType::RefreshTokenIssued,
+                AuditResult::Success,
+                Some(stored.user_id),
+                Some(&client_id),
+                None,
+                ctx,
+            )
+            .await;
+        self.audit
+            .record(
+                AuditEventType::TokenIssued,
+                AuditResult::Success,
+                Some(stored.user_id),
+                Some(&client_id),
+                None,
+                ctx,
+            )
+            .await;
+
+        Ok(IssuedTokens {
+            access_token,
+            id_token,
+            expires_in: self.access_token_ttl.as_secs(),
+            scope: scope_str,
+            refresh_token: Some(new_rt_plain),
+        })
+    }
+
+    async fn sign_id_token(&self, claims: &IdTokenClaims) -> Result<String, TokenError> {
+        let key = self
+            .keys
+            .active_signing_key()
+            .await
+            .map_err(|e| internal(&e))?;
+        jwt::sign(&key.private_pem, &key.kid, "JWT", &key.algorithm, claims)
+            .map_err(|e| internal(&e))
+    }
+
+    async fn sign_access_token(&self, claims: &AccessTokenClaims) -> Result<String, TokenError> {
+        let key = self
+            .keys
+            .active_signing_key()
+            .await
+            .map_err(|e| internal(&e))?;
+        jwt::sign(&key.private_pem, &key.kid, "at+jwt", &key.algorithm, claims)
+            .map_err(|e| internal(&e))
+    }
+
+    /// クライアント認証（設計仕様 §4.4）。
     async fn authenticate_client(
         &self,
         client: &Client,
@@ -394,6 +570,42 @@ impl TokenService {
         }
     }
 
+    async fn load_active_client(
+        &self,
+        client_id: &str,
+        ctx: &RequestContext,
+    ) -> Result<Client, TokenError> {
+        match self.clients.find_by_client_id(client_id).await {
+            Ok(Some(c)) if c.is_active() => Ok(c),
+            Ok(Some(_)) => Err(self
+                .client_auth_failed(client_id, "client_not_active", ctx)
+                .await),
+            Ok(None) => Err(self
+                .client_auth_failed(client_id, "unknown_client", ctx)
+                .await),
+            Err(e) => Err(internal(&e)),
+        }
+    }
+
+    async fn load_active_user(
+        &self,
+        user_id: uuid::Uuid,
+        _ctx: &RequestContext,
+    ) -> Result<crate::domain::user::User, TokenError> {
+        match self.users.find_by_id(user_id).await {
+            Ok(Some(u)) if u.is_active() => Ok(u),
+            Ok(Some(_)) => Err(TokenError::new(
+                OAuthErrorCode::InvalidGrant,
+                "user is not active",
+            )),
+            Ok(None) => Err(TokenError::new(
+                OAuthErrorCode::InvalidGrant,
+                "user no longer exists",
+            )),
+            Err(e) => Err(internal(&e)),
+        }
+    }
+
     async fn client_auth_failed(
         &self,
         client_id: &str,
@@ -414,6 +626,22 @@ impl TokenService {
             OAuthErrorCode::InvalidClient,
             "client authentication failed",
         )
+    }
+}
+
+/// client_id を Basic ヘッダ優先で解決する。
+fn resolve_client_id(cmd: &TokenCommand) -> Result<String, TokenError> {
+    match (&cmd.basic_credentials, &cmd.client_id) {
+        (Some((basic_id, _)), Some(body_id)) if basic_id != body_id => Err(TokenError::new(
+            OAuthErrorCode::InvalidRequest,
+            "client_id mismatch between Authorization header and body",
+        )),
+        (Some((basic_id, _)), _) => Ok(basic_id.clone()),
+        (None, Some(body_id)) if !body_id.is_empty() => Ok(body_id.clone()),
+        _ => Err(TokenError::new(
+            OAuthErrorCode::InvalidClient,
+            "client authentication is required",
+        )),
     }
 }
 

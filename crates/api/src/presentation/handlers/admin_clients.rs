@@ -41,7 +41,7 @@ pub async fn create_client(
     headers: HeaderMap,
     Json(body): Json<ClientRegisterRequest>,
 ) -> Result<(StatusCode, Json<ClientCreatedResponse>), ApiError> {
-    let ctx = request_context(&headers, &correlation);
+    let ctx = request_context(&headers, &correlation, state.config.trust_forwarded_headers());
     let client_type = ClientType::parse(&body.client_type)
         .map_err(|_| ApiError::BadRequest(format!("invalid client_type: {}", body.client_type)))?;
     let cmd = RegisterClientCommand {
@@ -50,6 +50,9 @@ pub async fn create_client(
         redirect_uris: body.redirect_uris,
         scopes: body.scopes,
         require_pkce: body.require_pkce,
+        post_logout_redirect_uris: body.post_logout_redirect_uris.unwrap_or_default(),
+        frontchannel_logout_uri: body.frontchannel_logout_uri,
+        backchannel_logout_uri: body.backchannel_logout_uri,
     };
 
     let registered = state
@@ -135,7 +138,7 @@ pub async fn update_client(
     Path(client_id): Path<String>,
     Json(body): Json<ClientUpdateRequest>,
 ) -> Result<Json<ClientResponse>, ApiError> {
-    let ctx = request_context(&headers, &correlation);
+    let ctx = request_context(&headers, &correlation, state.config.trust_forwarded_headers());
     let status = body
         .client_status
         .as_deref()
@@ -147,6 +150,9 @@ pub async fn update_client(
         redirect_uris: body.redirect_uris,
         scopes: body.scopes,
         status,
+        post_logout_redirect_uris: body.post_logout_redirect_uris,
+        frontchannel_logout_uri: body.frontchannel_logout_uri.map(Some),
+        backchannel_logout_uri: body.backchannel_logout_uri.map(Some),
     };
 
     let client = state
@@ -178,7 +184,7 @@ pub async fn rotate_client_secret(
     headers: HeaderMap,
     Path(client_id): Path<String>,
 ) -> Result<Json<ClientSecretResponse>, ApiError> {
-    let ctx = request_context(&headers, &correlation);
+    let ctx = request_context(&headers, &correlation, state.config.trust_forwarded_headers());
     let (client, secret) = state
         .clients_admin
         .rotate_secret(&client_id, admin.user_id, &ctx)
@@ -228,6 +234,9 @@ fn client_response(c: &Client) -> ClientResponse {
         scopes: c.scopes.clone(),
         token_endpoint_auth_method: c.token_endpoint_auth_method.as_str().to_string(),
         require_pkce: c.require_pkce,
+        post_logout_redirect_uris: c.post_logout_redirect_uris.clone(),
+        frontchannel_logout_uri: c.frontchannel_logout_uri.clone(),
+        backchannel_logout_uri: c.backchannel_logout_uri.clone(),
         created_at: c.created_at.to_rfc3339(),
         updated_at: c.updated_at.to_rfc3339(),
     }

@@ -2,6 +2,57 @@
 
 完了した重要な変更の要約（詳しい経緯は `history/`、設計判断は `adr/`）。
 
+## 2026-07-08（F4: Logout / F5: Token 管理）
+
+- **F4 — RP-initiated Logout（設計仕様 §9.3 / OIDC RP-initiated Logout 1.0）**:
+  - `clients` テーブルに `post_logout_redirect_uris`（JSON）、`frontchannel_logout_uri`、
+    `backchannel_logout_uri`（VARCHAR）を追加（migration 0008）。
+  - `LogoutService`: SSO セッション・関連 auth session・有効な authorization code を失効させ、
+    back-channel 通知対象（`backchannel_logout_uri` を持つ client）と front-channel URI 一覧を返す。
+  - `GET /logout`: SSO Cookie を失効させ、back-channel logout token（`logout+jwt`）を非同期 POST、
+    front-channel logout 用 iframe HTML を返す（または `post_logout_redirect_uri` へ 302）。
+  - Discovery に `end_session_endpoint`、`frontchannel_logout_supported`、`backchannel_logout_supported` を追加。
+
+- **F5 — Token Revocation / Introspection（RFC 7009 / RFC 7662）**:
+  - `revoked_access_tokens` テーブルを追加（migration 0009）。`jti` を PK として JTI ブロックリストを実現。
+  - `RevocationService`: Refresh Token（DB の `revoked_at`）と Access Token（JTI ブロックリスト）の両方を
+    失効させる。RFC 7009 §2.2 準拠: 失効済み・不存在でも 200 を返す。
+  - `IntrospectionService`: confidential client 専用。Access Token（署名検証 + JTI ブロックリスト）と
+    Refresh Token（DB 有効性確認）をイントロスペクトし `{ "active": true/false }` を返す。
+  - `POST /revoke`（RFC 7009）、`POST /introspect`（RFC 7662）エンドポイントを追加。
+  - `UserInfoService` も JTI ブロックリストを確認するよう更新。
+  - Discovery に `revocation_endpoint`、`introspection_endpoint` を追加。
+
+## 2026-07-08（F2: Refresh Token）
+
+- **F2 — Refresh Token（設計仕様 §9.1）**:
+  - `refresh_tokens` テーブルを追加（migration 0006）。`token_hash = SHA-256(plain_token)` で保存。
+    `parent_hash` で rotation チェーンを追跡し reuse detection に使う。
+  - `Scope::OfflineAccess`（`offline_access`）を追加。authorization_code フローで `offline_access`
+    を要求した場合のみ Refresh Token を発行する。
+  - Refresh Token rotation を実装: `POST /token?grant_type=refresh_token` で旧トークンを失効させ
+    新トークンを発行する。TTL は旧トークンから引き継ぐ（スライドさせない）。
+  - Reuse detection: 同一 token_hash から二重発行を検知した場合は `invalid_grant` を返し
+    旧トークンも失効させる（`refresh_token.reuse_detected` 監査ログを記録）。
+  - Discovery に `offline_access` scope と `refresh_token` grant type を追加。
+  - 設定: `REFRESH_TOKEN_TTL_SECS`（既定 2592000 = 30 日）。
+
+## 2026-07-08（K2: 署名鍵自動ローテーション / S1: SSL アクセラレーター対応）
+
+- **K2 — 署名鍵自動ローテーション**: `KeyService::rotate_if_needed(lead_days)` を追加。
+  ACTIVE 鍵の `not_after` まで `KEY_ROTATION_LEAD_DAYS`（既定 30 日）を切った際に新鍵（同アルゴリズム）を
+  自動生成し旧鍵を RETIRED に変更する。`lib.rs` で tokio バックグラウンドタスクを起動時に spawn し、
+  1 時間ごとに実行する。RETIRED 鍵は `not_after` 経過後に自動的に JWKS 非公開となる（既存挙動）。
+  設定: `KEY_ROTATION_LEAD_DAYS`（日数、既定 30）。
+- **S1 — SSL アクセラレーター/リバースプロキシ対応**:
+  - `TRUST_FORWARDED_HEADERS`（bool、既定 `false`）を追加。有効時のみ `X-Forwarded-For` を信頼して
+    実 IP を監査ログ・IP レート制限に使う。未設定時はヘッダを無視（ヘッダ偽装対策）。
+  - `HSTS_MAX_AGE`（秒、既定 `0` = 無効）を追加。正値のとき `Strict-Transport-Security: max-age=N`
+    をすべてのレスポンスに付与する。
+  - セキュリティヘッダミドルウェア（`security_headers.rs`）を新設。全レスポンスに
+    `X-Content-Type-Options: nosniff`・`Referrer-Policy: strict-origin-when-cross-origin`・
+    `X-Frame-Options: DENY` を付与する。
+
 ## 2026-07-08（K1: 署名鍵管理 — ES256 対応・管理 API・管理コンソール）
 
 - **EC(ES256) 対応**: `signing_keys.algorithm` の CHECK 制約に `ES256` を追加（migration 0005）。
@@ -336,3 +387,13 @@
   モジュール（環境変数 > 既定値、issuer 正規化・各種 TTL）、`tracing` の JSON 構造化ログ、sqlx の
   MariaDB 接続プール、起動時のスキーマ version 照合（`_sqlx_migrations` を SSOT とした fail-fast）、
   `/healthz`・`/readyz` ヘルスチェック、開発用 `docker-compose.yml`（MariaDB 10.11 / 任意 Redis）を実装。
+
+- **F3: Consent（同意画面・同意済み scope 記録、`prompt`/`max_age` 正式対応）**。
+  マイグレーション `0007_client_consents`（user_id×client_id の unique 制約付き JSON スコープ保持）を追加。
+  ドメイン層に `ClientConsent` エンティティ・`ClientConsentRepository` trait・監査イベント
+  `ConsentGranted`/`ConsentDenied` を追加。`AuthorizeRequest` に `prompt`/`max_age` フィールドを追加し、
+  `prompt=none`（インタラクション禁止）・`prompt=login`（強制再認証）・`max_age` 超過時の強制再認証を実装。
+  `ConsentRequired` を `AuthorizeOutcome`/`LoginOutcome` に追加し、SSO 再利用パスでも同意確認を行う。
+  `/internal/consent-info`・`/internal/consent-approve`・`/internal/consent-deny` の 3 エンドポイントを
+  api に追加。web 側に `/consent` 画面（Askama テンプレート、CSRF 保護付き POST）を追加。
+  i18n（en/ja）の同意画面文言を追加。

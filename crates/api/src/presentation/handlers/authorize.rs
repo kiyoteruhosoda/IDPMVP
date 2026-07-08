@@ -11,15 +11,15 @@ use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 
-/// OIDC 認可エンドポイント。検証成功時は `redirect_uri` または `/login` へ 302 する。
-/// `prompt` / `max_age` / `login_hint` / `acr_values` は MVP では無視する。
+/// OIDC 認可エンドポイント。検証成功時は `redirect_uri` または `/login` または `/consent` へ 302 する。
+/// `prompt` / `max_age` に正式対応（F3）。`login_hint` / `acr_values` は引き続き無視する。
 #[utoipa::path(
     get,
     path = "/authorize",
     tag = "oidc",
     params(AuthorizeParams),
     responses(
-        (status = 302, description = "redirect_uri（code/error 付与）または /login へリダイレクト"),
+        (status = 302, description = "redirect_uri（code/error 付与）または /login または /consent へリダイレクト"),
         (status = 400, description = "client_id / redirect_uri が無効（リダイレクトしない）", body = OAuthErrorResponse),
     )
 )]
@@ -29,7 +29,7 @@ pub async fn authorize(
     headers: HeaderMap,
     Query(params): Query<AuthorizeParams>,
 ) -> Response {
-    let ctx = request_context(&headers, &correlation);
+    let ctx = request_context(&headers, &correlation, state.config.trust_forwarded_headers());
     let request = AuthorizeRequest {
         response_type: params.response_type,
         client_id: params.client_id,
@@ -40,6 +40,8 @@ pub async fn authorize(
         code_challenge: params.code_challenge,
         code_challenge_method: params.code_challenge_method,
         sso_session_id: cookies::get(&headers, cookies::SSO_SESSION_COOKIE),
+        prompt: params.prompt,
+        max_age: params.max_age,
     };
 
     match state.authorize.authorize(request, &ctx).await {
@@ -54,6 +56,15 @@ pub async fn authorize(
                 state.config.cookie_secure(),
             );
             ([(header::SET_COOKIE, cookie)], found("/login")).into_response()
+        }
+        AuthorizeOutcome::ConsentRequired { auth_session_id } => {
+            let cookie = cookies::build(
+                cookies::AUTH_SESSION_COOKIE,
+                &auth_session_id,
+                state.config.auth_session_ttl().as_secs(),
+                state.config.cookie_secure(),
+            );
+            ([(header::SET_COOKIE, cookie)], found("/consent")).into_response()
         }
         AuthorizeOutcome::FatalError { error, description } => (
             StatusCode::BAD_REQUEST,

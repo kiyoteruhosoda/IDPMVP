@@ -98,11 +98,13 @@ string_enum!(
 );
 
 string_enum!(
-    /// OIDC scope（MVP で扱う 3 種）。要求 scope は `Clients.scopes` の部分集合であること。
+    /// OIDC scope。要求 scope は `Clients.scopes` の部分集合であること。
+    /// `offline_access` は Refresh Token 発行を要求する（設計仕様 §9.1）。
     Scope {
         OpenId => "openid",
         Profile => "profile",
         Email => "email",
+        OfflineAccess => "offline_access",
     }
 );
 

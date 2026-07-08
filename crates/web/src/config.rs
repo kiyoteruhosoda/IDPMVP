@@ -10,6 +10,8 @@ use std::env;
 /// 内部サービス認証トークンの開発用デフォルト（api 側と同値。ADR-0007 §5）。
 /// 本番では必ず `INTERNAL_SERVICE_TOKEN` を api と共有の値で設定する。
 const DEV_INTERNAL_SERVICE_TOKEN: &str = "idp-dev-insecure-internal-service-token";
+/// `auth_session_id` Cookie のデフォルト TTL（秒）。api 側と合わせる（600 秒 = 10 分）。
+const DEFAULT_AUTH_SESSION_TTL_SECS: u64 = 600;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LogFormat {
@@ -24,6 +26,7 @@ pub struct Config {
     internal_service_token: String,
     internal_service_token_is_dev: bool,
     cookie_secure: bool,
+    auth_session_ttl_secs: u64,
     log_format: LogFormat,
 }
 
@@ -44,6 +47,7 @@ impl Config {
             internal_service_token,
             internal_service_token_is_dev,
             cookie_secure,
+            auth_session_ttl_secs: env_parse("AUTH_SESSION_TTL_SECS", DEFAULT_AUTH_SESSION_TTL_SECS)?,
             log_format: match env_or("LOG_FORMAT", "json").to_ascii_lowercase().as_str() {
                 "pretty" => LogFormat::Pretty,
                 _ => LogFormat::Json,
@@ -68,6 +72,10 @@ impl Config {
     /// web が組み立てる Cookie に `Secure` を付けるか（api の応答値を Cookie 化する際に使う）。
     pub fn cookie_secure(&self) -> bool {
         self.cookie_secure
+    }
+    /// `auth_session_id` Cookie の TTL（秒）。api 側の `AUTH_SESSION_TTL_SECS` と合わせる。
+    pub fn auth_session_ttl_secs(&self) -> u64 {
+        self.auth_session_ttl_secs
     }
     pub fn log_format(&self) -> LogFormat {
         self.log_format

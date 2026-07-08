@@ -128,6 +128,35 @@ pub async fn login(
             auth_session_id.as_deref(),
             "login-error-locked",
         ),
+        InternalAuthenticateResponse::ConsentRequired {
+            auth_session_id: new_auth_session_id,
+            sso_session_id,
+            sso_absolute_ttl_secs,
+        } => {
+            // SSO Cookie を発行し、同意画面用の auth_session_id Cookie を設定する。
+            let sso_cookie = cookies::build(
+                cookies::SSO_SESSION_COOKIE,
+                &sso_session_id,
+                sso_absolute_ttl_secs,
+                secure,
+            );
+            // auth_session_id はまだ有効（同意画面で使う）ので期限をそのまま保持する。
+            // 具体的な TTL は api 側で設定済みのため、ここでは既存の Cookie を上書きする。
+            let auth_cookie = cookies::build(
+                cookies::AUTH_SESSION_COOKIE,
+                &new_auth_session_id,
+                state.config.auth_session_ttl_secs(),
+                secure,
+            );
+            (
+                AppendHeaders([
+                    (header::SET_COOKIE, sso_cookie),
+                    (header::SET_COOKIE, auth_cookie),
+                ]),
+                found("/consent"),
+            )
+                .into_response()
+        }
         InternalAuthenticateResponse::Internal => {
             (StatusCode::INTERNAL_SERVER_ERROR, Html(String::new())).into_response()
         }

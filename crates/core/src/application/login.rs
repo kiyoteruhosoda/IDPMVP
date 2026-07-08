@@ -1,7 +1,8 @@
 //! ログインのユースケース（設計仕様 §4.3）。
 //!
 //! AuthSession（Cookie）→ CSRF → レート制限 → 資格情報 → アカウント状態・ロックの順に検証し、
-//! 成功時は SSO セッション発行 → code 発行（`code_issuance` 共通モジュール）→ AuthSession 削除。
+//! 成功時は SSO セッション発行 → 同意チェック → 同意済みなら code 発行（`code_issuance` 共通モジュール）
+//! → AuthSession 削除。同意未完なら `/consent` へ誘導する（F3）。
 //!
 //! ロックポリシー: username 単位で連続 10 回失敗 → 15 分ロック。IP 単位のレート制限。
 //! 成功時に `failed_login_count = 0` / `locked_until = NULL` へリセットする。
@@ -13,7 +14,9 @@ use crate::domain::audit::{AuditEventType, AuditResult};
 use crate::domain::clock::Clock;
 use crate::domain::password::PasswordHasher;
 use crate::domain::rate_limit::LoginRateLimiter;
-use crate::domain::repositories::{AuthSessionRepository, SsoSessionRepository, UserRepository};
+use crate::domain::repositories::{
+    AuthSessionRepository, ClientConsentRepository, SsoSessionRepository, UserRepository,
+};
 use crate::domain::sso_session::SsoSession;
 use crate::domain::user::User;
 use crate::infrastructure::crypto;
@@ -43,9 +46,15 @@ pub struct LoginCommand {
 }
 
 pub enum LoginOutcome {
-    /// 認証成功。`redirect_uri?code=...&state=...` へ 302 し、SSO Cookie を発行する。
+    /// 認証成功かつ同意済み。`redirect_uri?code=...&state=...` へ 302 し、SSO Cookie を発行する。
     Success {
         location: String,
+        sso_session_id: String,
+    },
+    /// 認証成功だが未同意 scope あり。同意画面へリダイレクトする。
+    /// SSO Cookie は発行済み（`sso_session_id`）。AuthSession は認証済み状態で残す。
+    ConsentRequired {
+        auth_session_id: String,
         sso_session_id: String,
     },
     /// AuthSession が無い・期限切れ（`/authorize` からやり直し）。
@@ -65,6 +74,7 @@ pub struct LoginService {
     users: Arc<dyn UserRepository>,
     auth_sessions: Arc<dyn AuthSessionRepository>,
     sso_sessions: Arc<dyn SsoSessionRepository>,
+    client_consents: Arc<dyn ClientConsentRepository>,
     code_issuance: Arc<CodeIssuanceService>,
     hasher: Arc<dyn PasswordHasher>,
     rate_limiter: Arc<dyn LoginRateLimiter>,
@@ -80,6 +90,7 @@ impl LoginService {
         users: Arc<dyn UserRepository>,
         auth_sessions: Arc<dyn AuthSessionRepository>,
         sso_sessions: Arc<dyn SsoSessionRepository>,
+        client_consents: Arc<dyn ClientConsentRepository>,
         code_issuance: Arc<CodeIssuanceService>,
         hasher: Arc<dyn PasswordHasher>,
         rate_limiter: Arc<dyn LoginRateLimiter>,
@@ -92,6 +103,7 @@ impl LoginService {
             users,
             auth_sessions,
             sso_sessions,
+            client_consents,
             code_issuance,
             hasher,
             rate_limiter,
@@ -246,7 +258,7 @@ impl LoginService {
             )
             .await;
 
-        // 10. AuthSession に認証結果を記録し、code を発行する（§4.2 と共通モジュール）。
+        // 10. AuthSession に認証結果を記録する。
         if let Err(e) = self
             .auth_sessions
             .set_authenticated_user(&session.id, user.id, now)
@@ -254,6 +266,37 @@ impl LoginService {
         {
             return LoginOutcome::Internal(e.to_string());
         }
+
+        // 11. 同意チェック（`openid` は暗黙同意）。
+        let scopes_needing_consent: Vec<String> = session
+            .scope
+            .iter()
+            .filter(|s| s.as_str() != "openid")
+            .cloned()
+            .collect();
+        let consented = if scopes_needing_consent.is_empty() {
+            true
+        } else {
+            match self
+                .client_consents
+                .find(user.id, &client_id)
+                .await
+            {
+                Ok(Some(consent)) => consent.covers(&scopes_needing_consent),
+                Ok(None) => false,
+                Err(e) => return LoginOutcome::Internal(e.to_string()),
+            }
+        };
+
+        if !consented {
+            // 同意未完: AuthSession は認証済み状態のまま残す。同意画面へ。
+            return LoginOutcome::ConsentRequired {
+                auth_session_id: session.id,
+                sso_session_id,
+            };
+        }
+
+        // 12. 同意済み: code を発行する（§4.2 と共通モジュール）。
         let code = match self
             .code_issuance
             .issue(
@@ -275,7 +318,7 @@ impl LoginService {
             Err(e) => return LoginOutcome::Internal(e.to_string()),
         };
 
-        // 11. AuthSession を削除する（Cookie 失効はハンドラが行う）。
+        // 13. AuthSession を削除する（Cookie 失効はハンドラが行う）。
         if let Err(e) = self.auth_sessions.delete(&session.id).await {
             tracing::warn!(error = %e, "failed to delete auth session after code issuance");
         }

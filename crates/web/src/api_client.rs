@@ -13,7 +13,8 @@ use idp_contracts::admin::{
 };
 use idp_contracts::auth::{
     InternalAdminAuthenticateRequest, InternalAdminAuthenticateResponse,
-    InternalAuthenticateRequest, InternalAuthenticateResponse, InternalLogoutRequest,
+    InternalAuthenticateRequest, InternalAuthenticateResponse, InternalConsentApproveRequest,
+    InternalConsentApproveResponse, InternalConsentDenyRequest, InternalConsentDenyResponse, InternalConsentInfoResponse, InternalLogoutRequest,
 };
 use reqwest::Method;
 
@@ -108,6 +109,47 @@ impl ApiClient {
             anyhow::bail!("api /internal/logout returned status {}", response.status());
         }
         Ok(())
+    }
+
+    /// 同意画面情報取得（`GET /internal/consent-info`）。
+    pub async fn consent_info(
+        &self,
+        correlation_id: &str,
+        auth_session_id: &str,
+    ) -> anyhow::Result<InternalConsentInfoResponse> {
+        let response = self
+            .http
+            .get(format!("{}/internal/consent-info", self.base_url))
+            .header(SERVICE_TOKEN_HEADER, &self.service_token)
+            .header(REQUEST_ID_HEADER, correlation_id)
+            .query(&[("auth_session_id", auth_session_id)])
+            .send()
+            .await
+            .map_err(|e| anyhow::anyhow!("request to api /internal/consent-info failed: {e}"))?;
+        response
+            .json::<InternalConsentInfoResponse>()
+            .await
+            .map_err(|e| anyhow::anyhow!("failed to decode consent-info response: {e}"))
+    }
+
+    /// 同意承認（`POST /internal/consent/approve`）。
+    pub async fn consent_approve(
+        &self,
+        correlation_id: &str,
+        req: &InternalConsentApproveRequest,
+    ) -> anyhow::Result<InternalConsentApproveResponse> {
+        self.post_internal("/internal/consent/approve", correlation_id, req)
+            .await
+    }
+
+    /// 同意拒否（`POST /internal/consent/deny`）。
+    pub async fn consent_deny(
+        &self,
+        correlation_id: &str,
+        req: &InternalConsentDenyRequest,
+    ) -> anyhow::Result<InternalConsentDenyResponse> {
+        self.post_internal("/internal/consent/deny", correlation_id, req)
+            .await
     }
 
     /// 管理者の SSO Cookie を api の `GET /admin/whoami` へ転送し、認証状態と身元を得る（ADR-0007 §4）。

@@ -7,10 +7,14 @@ pub mod admin_permissions;
 pub mod admin_signing_keys;
 pub mod admin_users;
 pub mod authorize;
+pub mod consent;
 pub mod discovery;
 pub mod health;
 pub mod internal_auth;
+pub mod introspect;
+pub mod logout;
 pub mod register;
+pub mod revoke;
 pub mod token;
 pub mod userinfo;
 
@@ -32,14 +36,26 @@ pub(crate) fn found(location: &str) -> Response {
 }
 
 /// リクエストヘッダから監査コンテキストを組み立てる。
-/// IP はリバースプロキシ配下を想定して `X-Forwarded-For` の先頭値を使う。
-pub(crate) fn request_context(headers: &HeaderMap, correlation: &CorrelationId) -> RequestContext {
-    let ip_address = headers
-        .get("x-forwarded-for")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.split(',').next())
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty());
+///
+/// `trust_forwarded` が `true` のときのみ `X-Forwarded-For` を信頼して実 IP を採用する。
+/// `false` のときはフォワードヘッダを無視する（ヘッダ偽装対策; S1）。
+/// 接続元ソケット IP を直接取得するには `ConnectInfo` extractor が必要なため、ここでは
+/// 信頼設定が無効の場合 `ip_address = None` となる（監査ログに IP が記録されない）。
+pub(crate) fn request_context(
+    headers: &HeaderMap,
+    correlation: &CorrelationId,
+    trust_forwarded: bool,
+) -> RequestContext {
+    let ip_address = if trust_forwarded {
+        headers
+            .get("x-forwarded-for")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.split(',').next())
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+    } else {
+        None
+    };
     let user_agent = headers
         .get(USER_AGENT)
         .and_then(|v| v.to_str().ok())

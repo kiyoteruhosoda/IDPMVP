@@ -31,6 +31,10 @@ pub struct AuthorizeParams {
     pub nonce: Option<String>,
     pub code_challenge: Option<String>,
     pub code_challenge_method: Option<String>,
+    /// `prompt` パラメータ（OIDC Core §3.1.2.1）: `none` / `login` / `consent` / `select_account`。
+    pub prompt: Option<String>,
+    /// `max_age` パラメータ（OIDC Core §3.1.2.1）: SSO セッションの auth_time からの最大経過秒数。
+    pub max_age: Option<u64>,
 }
 
 /// `POST /login` のフォームパラメータ（設計仕様 §4.3）。
@@ -44,7 +48,7 @@ pub struct LoginForm {
 // 内部認証 API（`/internal/authenticate*`）の DTO は api サーバと web クライアントで共有するため
 // `idp-contracts` crate に定義する（ADR-0007 §6）。handler は `idp_contracts::auth::*` を用いる。
 
-/// `POST /token` のフォームパラメータ（設計仕様 §4.4）。
+/// `POST /token` のフォームパラメータ（設計仕様 §4.4・§9.1）。
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct TokenRequest {
     pub grant_type: Option<String>,
@@ -52,6 +56,8 @@ pub struct TokenRequest {
     pub redirect_uri: Option<String>,
     pub code_verifier: Option<String>,
     pub client_id: Option<String>,
+    /// `refresh_token` grant 専用。
+    pub refresh_token: Option<String>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -61,6 +67,9 @@ pub struct TokenResponse {
     pub expires_in: u64,
     pub id_token: String,
     pub scope: String,
+    /// `offline_access` scope を要求した場合のみ返却する。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refresh_token: Option<String>,
 }
 
 /// OAuth 2.0 のエラーレスポンス（RFC 6749 §5.2）。
@@ -83,6 +92,15 @@ pub struct ClientRegisterRequest {
     /// 省略時は既定（true）。public は常に PKCE 必須。
     #[serde(default)]
     pub require_pkce: Option<bool>,
+    /// RP-initiated logout のリダイレクト先（登録済みのもののみ許可）。
+    #[serde(default)]
+    pub post_logout_redirect_uris: Option<Vec<String>>,
+    /// front-channel logout URI（OIDC front-channel logout 1.0）。
+    #[serde(default)]
+    pub frontchannel_logout_uri: Option<String>,
+    /// back-channel logout URI（OIDC back-channel logout 1.0）。
+    #[serde(default)]
+    pub backchannel_logout_uri: Option<String>,
 }
 
 /// クライアント部分更新リクエスト。指定した項目のみ更新する。
@@ -97,6 +115,12 @@ pub struct ClientUpdateRequest {
     /// `ACTIVE` または `DISABLED`。
     #[serde(default)]
     pub client_status: Option<String>,
+    #[serde(default)]
+    pub post_logout_redirect_uris: Option<Vec<String>>,
+    #[serde(default)]
+    pub frontchannel_logout_uri: Option<String>,
+    #[serde(default)]
+    pub backchannel_logout_uri: Option<String>,
 }
 
 /// 監査ログ検索のクエリパラメータ（管理 API、A3・設計仕様 §7）。
@@ -172,6 +196,12 @@ pub struct ClientResponse {
     pub scopes: Vec<String>,
     pub token_endpoint_auth_method: String,
     pub require_pkce: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub post_logout_redirect_uris: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frontchannel_logout_uri: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub backchannel_logout_uri: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
