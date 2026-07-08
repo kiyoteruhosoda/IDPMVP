@@ -44,7 +44,7 @@ pub struct LoginForm {
 // 内部認証 API（`/internal/authenticate*`）の DTO は api サーバと web クライアントで共有するため
 // `idp-contracts` crate に定義する（ADR-0007 §6）。handler は `idp_contracts::auth::*` を用いる。
 
-/// `POST /token` のフォームパラメータ（設計仕様 §4.4）。
+/// `POST /token` のフォームパラメータ（設計仕様 §4.4・§9.1）。
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct TokenRequest {
     pub grant_type: Option<String>,
@@ -52,6 +52,8 @@ pub struct TokenRequest {
     pub redirect_uri: Option<String>,
     pub code_verifier: Option<String>,
     pub client_id: Option<String>,
+    /// `refresh_token` grant 専用。
+    pub refresh_token: Option<String>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -61,6 +63,9 @@ pub struct TokenResponse {
     pub expires_in: u64,
     pub id_token: String,
     pub scope: String,
+    /// `offline_access` scope を要求した場合のみ返却する。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refresh_token: Option<String>,
 }
 
 /// OAuth 2.0 のエラーレスポンス（RFC 6749 §5.2）。

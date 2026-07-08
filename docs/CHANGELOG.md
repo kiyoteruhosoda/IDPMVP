@@ -2,6 +2,20 @@
 
 完了した重要な変更の要約（詳しい経緯は `history/`、設計判断は `adr/`）。
 
+## 2026-07-08（F2: Refresh Token）
+
+- **F2 — Refresh Token（設計仕様 §9.1）**:
+  - `refresh_tokens` テーブルを追加（migration 0006）。`token_hash = SHA-256(plain_token)` で保存。
+    `parent_hash` で rotation チェーンを追跡し reuse detection に使う。
+  - `Scope::OfflineAccess`（`offline_access`）を追加。authorization_code フローで `offline_access`
+    を要求した場合のみ Refresh Token を発行する。
+  - Refresh Token rotation を実装: `POST /token?grant_type=refresh_token` で旧トークンを失効させ
+    新トークンを発行する。TTL は旧トークンから引き継ぐ（スライドさせない）。
+  - Reuse detection: 同一 token_hash から二重発行を検知した場合は `invalid_grant` を返し
+    旧トークンも失効させる（`refresh_token.reuse_detected` 監査ログを記録）。
+  - Discovery に `offline_access` scope と `refresh_token` grant type を追加。
+  - 設定: `REFRESH_TOKEN_TTL_SECS`（既定 2592000 = 30 日）。
+
 ## 2026-07-08（K2: 署名鍵自動ローテーション / S1: SSL アクセラレーター対応）
 
 - **K2 — 署名鍵自動ローテーション**: `KeyService::rotate_if_needed(lead_days)` を追加。

@@ -10,6 +10,7 @@ use crate::domain::auth_session::AuthSession;
 use crate::domain::authorization_code::AuthorizationCode;
 use crate::domain::client::Client;
 use crate::domain::error::Result;
+use crate::domain::refresh_token::RefreshToken;
 use crate::domain::signing_key::SigningKey;
 use crate::domain::sso_session::SsoSession;
 use crate::domain::user::User;
@@ -131,4 +132,19 @@ pub trait UserPermissionRepository: Send + Sync {
     async fn grant(&self, user_id: Uuid, code: &str, granted_at: DateTime<Utc>) -> Result<()>;
     /// 権限を剥奪する（不存在でもエラーにしない）。
     async fn revoke(&self, user_id: Uuid, code: &str) -> Result<()>;
+}
+
+/// Refresh Token の永続化（設計仕様 §9.1）。DB には SHA-256 hash を保存する。
+#[async_trait]
+pub trait RefreshTokenRepository: Send + Sync {
+    /// 新規 Refresh Token を保存する。
+    async fn create(&self, token: &RefreshToken) -> Result<()>;
+    /// hash で検索する。不存在は `None`。
+    async fn find_by_hash(&self, token_hash: &str) -> Result<Option<RefreshToken>>;
+    /// 指定 hash のトークンを失効させる（`revoked_at` を設定）。
+    /// 不存在・既失効でもエラーにしない（冪等）。
+    async fn revoke(&self, token_hash: &str, revoked_at: DateTime<Utc>) -> Result<()>;
+    /// `parent_hash` でチェーンを検索し、存在する（未失効・失効問わず）場合は `true`。
+    /// reuse detection で同一 parent から二重発行が起きていないかを確認するために使う。
+    async fn exists_by_parent_hash(&self, parent_hash: &str) -> Result<bool>;
 }

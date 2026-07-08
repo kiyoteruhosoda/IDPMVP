@@ -46,6 +46,7 @@ pub async fn token(
         code_verifier: body.code_verifier,
         client_id: body.client_id,
         basic_credentials,
+        refresh_token: body.refresh_token,
     };
 
     match state.token.exchange(command, &ctx).await {
@@ -61,6 +62,7 @@ pub async fn token(
                 expires_in: tokens.expires_in,
                 id_token: tokens.id_token,
                 scope: tokens.scope,
+                refresh_token: tokens.refresh_token,
             }),
         )
             .into_response(),

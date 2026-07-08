@@ -26,6 +26,7 @@ use crate::infrastructure::repositories::audit_log::{SqlxAuditLogQuery, SqlxAudi
 use crate::infrastructure::repositories::auth_session::SqlxAuthSessionRepository;
 use crate::infrastructure::repositories::authorization_code::SqlxAuthorizationCodeRepository;
 use crate::infrastructure::repositories::client::SqlxClientRepository;
+use crate::infrastructure::repositories::refresh_token::SqlxRefreshTokenRepository;
 use crate::infrastructure::repositories::signing_key::SqlxSigningKeyRepository;
 use crate::infrastructure::repositories::sso_session::SqlxSsoSessionRepository;
 use crate::infrastructure::repositories::user::SqlxUserRepository;
@@ -63,6 +64,7 @@ impl AppState {
         let auth_sessions = Arc::new(SqlxAuthSessionRepository::new(pool.clone()));
         let sso_sessions = Arc::new(SqlxSsoSessionRepository::new(pool.clone()));
         let codes = Arc::new(SqlxAuthorizationCodeRepository::new(pool.clone()));
+        let refresh_tokens = Arc::new(SqlxRefreshTokenRepository::new(pool.clone()));
         let signing_keys = Arc::new(SqlxSigningKeyRepository::new(pool.clone()));
         let user_permissions = Arc::new(SqlxUserPermissionRepository::new(pool.clone()));
         let audit_sink = Arc::new(SqlxAuditLogSink::new(pool.clone()));
@@ -142,6 +144,7 @@ impl AppState {
             clients,
             users.clone(),
             codes,
+            refresh_tokens,
             keys.clone(),
             hasher,
             audit.clone(),
@@ -149,6 +152,7 @@ impl AppState {
             config.issuer().to_string(),
             config.access_token_ttl(),
             config.id_token_ttl(),
+            config.refresh_token_ttl(),
         ));
         let userinfo = Arc::new(UserInfoService::new(
             signing_keys,

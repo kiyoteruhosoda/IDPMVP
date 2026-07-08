@@ -39,6 +39,7 @@ pub struct Config {
     sso_absolute_ttl: Duration,
     access_token_ttl: Duration,
     id_token_ttl: Duration,
+    refresh_token_ttl: Duration,
     clock_skew: Duration,
     cookie_secure: bool,
     key_encryption_key: [u8; 32],
@@ -81,6 +82,8 @@ impl Config {
             sso_absolute_ttl: secs(env_parse("SSO_ABSOLUTE_TTL_SECS", 86_400)?),
             access_token_ttl: secs(env_parse("ACCESS_TOKEN_TTL_SECS", 900)?),
             id_token_ttl: secs(env_parse("ID_TOKEN_TTL_SECS", 3_600)?),
+            // Refresh Token は既定 30 日（offline_access scope で発行。rotation あり）。
+            refresh_token_ttl: secs(env_parse("REFRESH_TOKEN_TTL_SECS", 2_592_000)?),
             clock_skew: secs(env_parse("CLOCK_SKEW_SECS", 60)?),
             cookie_secure,
             key_encryption_key,
@@ -126,6 +129,9 @@ impl Config {
     }
     pub fn id_token_ttl(&self) -> Duration {
         self.id_token_ttl
+    }
+    pub fn refresh_token_ttl(&self) -> Duration {
+        self.refresh_token_ttl
     }
     pub fn clock_skew(&self) -> Duration {
         self.clock_skew
