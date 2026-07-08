@@ -9,10 +9,25 @@ OIDC IdP MVP（**Rust + MariaDB**）の実装計画。設計仕様は `docs/OIDC
 
 | 優先 | # | 概要 | 状態 | 影響度 | 工数 |
 |---|---|---|---|---|---|
-| 1 | T1 | MFA基盤: DBマイグレーション＋ドメイン設計 | ⬜未着手 | 大 | 中 |
-| 2 | T2 | TOTP登録・管理（セルフ登録・確定・削除） | ⬜未着手 | 大 | 大 |
-| 3 | T3 | ログインフローへの TOTPステップ追加 | ⬜未着手 | 大 | 大 |
-| 4 | T4 | Passkey（WebAuthn）登録・認証 | ⬜未着手 | 大 | 大 |
+| 1 | T4 | Passkey（WebAuthn）登録・認証 | ⬜未着手 | 大 | 大 |
+
+---
+
+### 詳細
+
+#### T4: Passkey（WebAuthn）登録・認証
+
+**Application**: `passkey_registration.rs`（登録開始・完了）/ `passkey_authentication.rs`（認証開始・完了）
+
+**Infrastructure**: `webauthn_credential.rs`（sqlx）/ `webauthn.rs`（`webauthn-rs` ラッパー）
+
+**API**:
+- `POST /account/mfa/passkey/register/begin` / `complete`
+- `DELETE /account/mfa/passkey/:id`
+- `POST /login/passkey/begin` / `complete`
+
+**Web**: Passkey登録画面（WebAuthn JS API 呼び出し）・ログイン画面に Passkey ボタン追加
+
 
 ---
 

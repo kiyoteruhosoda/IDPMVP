@@ -397,3 +397,21 @@
   `/internal/consent-info`・`/internal/consent-approve`・`/internal/consent-deny` の 3 エンドポイントを
   api に追加。web 側に `/consent` 画面（Askama テンプレート、CSRF 保護付き POST）を追加。
   i18n（en/ja）の同意画面文言を追加。
+
+## TOTP MFA（任意の二段階認証）実装
+
+ユーザーが自分で TOTP（Google Authenticator 等）を登録・削除できる任意 MFA を実装。
+強制ではなくオプション機能として提供する。
+
+- **DB**: `user_totp_secrets`（`secret_encrypted`, `confirmed_at`）テーブルを追加（migration 0010）。
+  `auth_sessions` に `password_verified_at` カラムを追加（migration 0011）。
+- **Domain**: `TotpSecret` エンティティ、`TotpSecretRepository` トレイト、
+  `AuthSession.password_verified_at` フィールド追加。
+- **Application**: `TotpRegistrationService`（setup/confirm/delete）、`MfaLoginService`（TOTPステップ）。
+  シークレットは AES-256-GCM 暗号化（署名鍵と同方式）。コード検証は `totp-rs 5.x` を使用。
+- **API**: `/internal/mfa/totp/setup|confirm|delete|verify` 4 エンドポイントを追加。
+  `InternalAuthenticateResponse::MfaRequired` バリアント追加。
+- **Web**: `/account/mfa/totp/setup`（セルフ登録）・`/mfa/totp`（ログインフロー TOTP 入力）を追加。
+  セットアップ画面は QR コード SVG（サーバサイド生成、`qrcode 0.14`）と生 base32 シークレットの両方を表示
+  （QR が使えないユーザーも手動入力できる）。
+- **i18n**: MFA 関連文言を en/ja に追加。
