@@ -65,6 +65,16 @@ wait_healthy "$compose" mariadb
 log "マイグレーションを適用します（専用ジョブ）..."
 $compose run --rm migrate
 
+# root テナント UUID は seed が動的採番するため環境ごとに異なる（ADR-0009 §1）。
+# システム管理者のログイン URL（/{root_uuid}/... 系）の確定に必要なので、ここで標準出力へ記録する。
+# 後から確認する手順は docs/OPERATIONS.md「root テナントの UUID を確認したいとき」。
+db_user="$(get_env_var MARIADB_USER "$env_file")"
+db_name="$(get_env_var MARIADB_DATABASE "$env_file")"
+root_tenant_id="$($compose exec -T mariadb mariadb -u"${db_user:-idp}" \
+  -p"$(get_env_var MARIADB_PASSWORD "$env_file")" "${db_name:-idp}" -N -B \
+  -e 'SELECT id FROM tenants WHERE parent_tenant_id IS NULL' 2>/dev/null || true)"
+log "root テナント UUID: ${root_tenant_id:-（取得失敗。docs/OPERATIONS.md の手順で確認する）}"
+
 # --- 5. api・web・proxy 起動 ----------------------------------------------------
 log "api・web・proxy を起動します..."
 $compose up -d api web proxy
