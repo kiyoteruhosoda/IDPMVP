@@ -2,6 +2,30 @@
 
 完了した重要な変更の要約（詳しい経緯は `history/`、設計判断は `adr/`）。
 
+## 2026-07-10（MT1・MT2: マルチテナントのデータ基盤 — 初期 DDL・seed の刷新）
+
+- **初期マイグレーションを ADR-0009 の定義で全面刷新**（既存 0001〜0012 を廃棄し
+  `0001_baseline` + `0002_seed_master_data` へ。全環境 DB 再作成が必要 —
+  手順は `docs/OPERATIONS.md`「DB を作り直したいとき」）。
+  - `tenants`（`is_root` 番兵列 + UNIQUE で **root を DB レベルで高々 1 行に担保**）・
+    `tenant_memberships`（HOME/GUEST・招待トークンハッシュ）を新設。
+  - `users`（`tenant_id`＝所属元・`must_change_password`・テナント内一意の email/username）・
+    `clients`（テナント内一意の `client_id`）・`user_permissions`（主キーへ scope=`tenant_id`）・
+    `auth_sessions`/`authorization_codes`/`refresh_tokens`/`client_consents`
+    （`(tenant_id, client_id)` 複合外部キー）・`audit_log`（`tenant_id`）を再定義。
+    `sso_sessions` はホスト共有のため tenant なし（境界はメンバーシップ検証。ADR-0009 §8）。
+  - MariaDB 10.11 は索引付き生成列で `IF()`/`CASE` を許可しない（ERROR 1901）ため、
+    番兵列の式は `(parent_tenant_id IS NULL) OR NULL` とした（ADR-0009 の DDL 例も修正）。
+- **seed（冪等）**: root テナントを **UUIDv7 で投入時に動的採番**（固定リテラル廃止）。
+  `idp.system.admin` の scope=root を縛る CHECK 制約は解決済み root UUID をリテラル化して
+  `PREPARE`/`EXECUTE` で付与（ファイルは静的・チェックサム全環境一致）。権限コード
+  （`idp.system.admin`/`idp.tenant.admin`）と初期管理者（root 所属・HOME メンバーシップ・
+  `must_change_password=1`・`idp.system.admin` を DB 直接付与）を投入。
+  `scripts/init.sh` が root UUID を標準出力へ記録する。
+- **統合テスト `schema.rs` を刷新**: 全テーブル存在・seed 検証に加え、negative test
+  （2 つ目の root 挿入拒否・`idp.system.admin` の非 root scope 付与拒否・同一テナント内
+  email 重複拒否とテナント跨ぎ許容）を MariaDB 10.11 実機で検証。
+
 ## 2026-07-10（ADR-0009 再改訂: テナント独立モデル・Entra ID 型）
 
 - **権限 scope のサブツリー伝播を廃止し、完全一致判定へ変更**。各テナントは独立した管理境界であり、

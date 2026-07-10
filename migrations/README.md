@@ -7,18 +7,31 @@ sqlx マイグレーション（MariaDB）を管理する。
   スキーマ・マスタデータのバージョン整合性の SSOT（`_sqlx_migrations` テーブル）。
 - 適用: `sqlx migrate run`（アプリ起動時には**適用しない**。起動時は「DB が期待 version 以上か」を
   照合するのみ ＝ fail-fast。詳細は `docs/adr/0004-schema-version-sync.md`）。
-- 規約: DB ネイティブ ENUM 禁止（`VARCHAR` + `CHECK`）、UUID は `CHAR(36)`、時刻は UTC の `DATETIME(6)`。
+- 規約: DB ネイティブ ENUM 禁止（`VARCHAR` + `CHECK`）、UUID は `CHAR(36)`（エンティティ主キーは
+  UUIDv7・揮発トークンは v4。ADR-0009 §12）、時刻は UTC の `DATETIME(6)`。
   詳細は `.claude/skills/db-migration/` と `CLAUDE.md`「DB モデリング」を参照。
+- マスタデータ（root テナント・権限コード・初期管理ユーザー等）も冪等 upsert のマイグレーション
+  として書く。単一の出所は当該 seed マイグレーション自身とし、値を他所へ重複させない。
 
-- マスタデータ（初期管理ユーザー等）も冪等 upsert のマイグレーションとして書く。単一の出所は
-  当該 seed マイグレーション自身とし、値を他所へ重複させない（`.claude/skills/db-migration/` 参照）。
+> **注意（ADR-0009 §11 の一度限りの刷新）**: マルチテナント対応で初期 DDL・マスタデータを全面的に
+> 作り直した（既存データは破棄・全環境 DB 再作成。手順は `docs/OPERATIONS.md`「DB を作り直したいとき」）。
+> 刷新後は従来どおり追記型マイグレーション（expand/contract・up/down 対・冪等 seed）に戻る。
+> ベースラインの書き換えは以後行わない。
 
 現行のマイグレーション:
 
-- `0001_baseline`: 全テーブル（users / clients / auth_sessions / sso_sessions /
-  authorization_codes / signing_keys / audit_log）。
-- `0002_seed_initial_admin`: 初期管理ユーザー（`admin@example.com`）の seed。「変更前提のデフォルト値」
-  として冪等 upsert。既定パスワードの変更手順は `docs/OPERATIONS.md`。
-- `0003_permissions_and_user_permissions`: 利用者権限モデル（ADR-0006）。`permissions`（権限コードの
-  マスタ）と `user_permissions`（利用者↔権限の多対多）を追加。OIDC scope とは別軸の内部認可。
-- `0004_seed_admin_permission`: 権限コード `idp.admin` の seed と、初期管理者への冪等付与。
+- `0001_baseline`: マルチテナント対応の全テーブル（ADR-0009）。`tenants`（`is_root` 番兵列 +
+  単一 root UNIQUE）・`tenant_memberships`・`users`（`tenant_id`・`must_change_password`）・
+  `clients`（テナント内一意の `client_id`）・`permissions`・`user_permissions`（scope = `tenant_id`）・
+  `auth_sessions` / `authorization_codes` / `refresh_tokens` / `client_consents`
+  （`(tenant_id, client_id)` 複合外部キー）・`sso_sessions`（ホスト共有のため tenant なし）・
+  `signing_keys`・`revoked_access_tokens`・`user_totp_secrets`・`user_webauthn_credentials`・
+  `passkey_challenges`・`audit_log`（`tenant_id` 追跡列）。
+- `0002_seed_master_data`: マスタデータ seed（冪等）。root テナント（UUIDv7 を**投入時に動的採番**。
+  固定リテラルなし）、`idp.system.admin` の scope = root を縛る CHECK 制約（解決済み root UUID を
+  リテラル化して `PREPARE`/`EXECUTE` で付与。ファイル自体は静的でチェックサムは全環境一致）、
+  権限コード（`idp.system.admin` / `idp.tenant.admin`）、初期管理者 `admin@example.com`
+  （root 所属・HOME メンバーシップ・`must_change_password = 1`・`idp.system.admin` を DB 直接付与）。
+
+root テナントの UUID は環境ごとに異なる。確認手順は `docs/OPERATIONS.md`
+「root テナントの UUID を確認したいとき」を参照。

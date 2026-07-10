@@ -28,6 +28,42 @@ DATABASE_URL='mysql://idp:idp@127.0.0.1:3306/idp' sqlx migrate run
 新規作成の規約は `migrations/README.md` と `.claude/skills/db-migration/` を参照。
 アプリは起動時に version を照合するだけで適用は行わない。
 
+## root テナントの UUID を確認したいとき
+
+root テナントの UUID は seed が**動的採番**するため環境ごとに異なる（固定値はない。ADR-0009 §1）。
+システム管理者のログイン URL（`/{root_uuid}/...` 系）の確定に必要になる。
+`scripts/init.sh` は初期化時に標準出力へ記録するが、後から確認するには DB を参照する。
+
+```sql
+SELECT id FROM tenants WHERE parent_tenant_id IS NULL;
+```
+
+```sh
+# Compose 環境の場合
+docker compose exec -T mariadb sh -c \
+  'exec mariadb -uidp -p"$MARIADB_PASSWORD" idp -N -B -e \
+   "SELECT id FROM tenants WHERE parent_tenant_id IS NULL"'
+```
+
+## DB を作り直したいとき（スキーマ刷新後の再作成）
+
+マルチテナント対応（ADR-0009 §11）で初期マイグレーションを全面刷新したため、**刷新前に作成した DB は
+そのまま使えない**（`_sqlx_migrations` のチェックサム不整合になる）。既存データを破棄して再作成する。
+
+```sh
+# Compose 環境: MariaDB のデータボリュームごと作り直して再適用する
+docker compose down mariadb
+docker volume rm <project>_mariadb_data      # ボリューム名は `docker volume ls` で確認
+docker compose up -d mariadb                 # healthy を待つ
+docker compose run --rm migrate              # DDL + マスタデータを適用
+
+# ホスト直結（開発）: DB を落として作り直す
+mariadb -e 'DROP DATABASE idp; CREATE DATABASE idp CHARACTER SET utf8mb4;'
+DATABASE_URL='mysql://idp:idp@127.0.0.1:3306/idp' sqlx migrate run
+```
+
+再作成後、root テナント UUID は再採番される（上記の手順で確認し、クライアント設定等を更新する）。
+
 ## テストを実行したいとき
 
 ```sh
@@ -95,22 +131,29 @@ curl -sS "$ISSUER/admin/audit-logs?event_type=token.issued&client_id=<cid>&from=
   -H "Cookie: sso_session_id=<セッションID>"
 ```
 
-## 利用者に管理権限（idp.admin）を付与／剥奪したいとき
+## 利用者に管理権限を付与／剥奪したいとき
 
 管理コンソールの権限付与 UI は未実装のため、SQL で `user_permissions` を操作する（権限モデルは
-ADR-0006）。付与できる権限コードは `permissions` マスタに存在するものに限る（初期値は `idp.admin`）。
-初期管理者（`admin@example.com`）には seed で `idp.admin` が付与済み。
+ADR-0006・ADR-0009 §4）。付与できる権限コードは `permissions` マスタに存在するもの
+（`idp.system.admin` / `idp.tenant.admin`）に限り、**scope（`tenant_id`）の明示が必須**。
+初期管理者（`admin@example.com`）には seed で `idp.system.admin`（scope = root）が付与済み。
+
+- `idp.tenant.admin`: 対象テナントを scope に指定する（当該テナント内の管理のみ。配下へは及ばない）。
+- `idp.system.admin`: scope は root のみ（CHECK 制約 `user_permissions_system_admin_scope_chk` が
+  root 以外の scope を拒否する）。
 
 ```sql
--- 付与（対象ユーザーの id は users テーブルから引く。email で照合する例）
-INSERT INTO user_permissions (user_id, permission_code)
-SELECT id, 'idp.admin' FROM users WHERE email = 'someone@example.com'
+-- 付与（idp.tenant.admin を対象テナント scope で。email はテナント内一意のため tenant_id で絞る）
+INSERT INTO user_permissions (user_id, permission_code, tenant_id)
+SELECT id, 'idp.tenant.admin', '<対象テナントUUID>' FROM users
+  WHERE tenant_id = '<所属元テナントUUID>' AND email = 'someone@example.com'
 ON DUPLICATE KEY UPDATE user_id = user_id;
 
 -- 剥奪
 DELETE up FROM user_permissions up
   JOIN users u ON u.id = up.user_id
-  WHERE u.email = 'someone@example.com' AND up.permission_code = 'idp.admin';
+  WHERE u.tenant_id = '<所属元テナントUUID>' AND u.email = 'someone@example.com'
+    AND up.permission_code = 'idp.tenant.admin' AND up.tenant_id = '<対象テナントUUID>';
 ```
 
 権限を保有する利用者は、有効な SSO セッション（一度ログイン済み）で `GET /admin/whoami` に
@@ -232,11 +275,13 @@ docker compose -f docker-compose.deploy.yml run --rm --entrypoint sqlx migrate m
 
 ## 初期管理ユーザーのパスワードを変更したいとき
 
-初期管理ユーザー `admin@example.com` は「変更前提のデフォルト値」として seed される
-（既定パスワード `ChangeMe!123`）。本番では初回ログイン後すぐに変更する。
+初期管理ユーザー `admin@example.com`（root テナント所属）は「変更前提のデフォルト値」として seed
+される（既定パスワード `ChangeMe!123`、`must_change_password = 1`）。本番では初回ログイン後すぐに
+変更する。パスワード変更（リセット）画面の実装後は初回ログイン時に強制誘導される（ADR-0009 §5。
+それまでの間に代替手段で変更した場合は `must_change_password` を手動で 0 に戻す）。
 
-MVP には管理 API・パスワード変更フローが無いため、`/auth/register` で新しい管理ユーザーを作成し
-（パスワードはアプリが argon2 でハッシュ化）、seed 管理ユーザーを無効化する運用とする。
+画面実装までの代替: `/auth/register` で新しい管理ユーザーを作成し（パスワードはアプリが argon2 で
+ハッシュ化）、seed 管理ユーザーを無効化する。
 
 ```sh
 # 1. 新しい管理ユーザーを登録（アプリがパスワードをハッシュ化）
@@ -247,7 +292,9 @@ curl -fsS -X POST http://localhost:8080/auth/register \
 
 ```sql
 -- 2. seed 管理ユーザーを無効化する（削除ではなく DISABLED にして監査を残す）
-UPDATE users SET status = 'DISABLED' WHERE email = 'admin@example.com';
+UPDATE users SET status = 'DISABLED'
+  WHERE email = 'admin@example.com'
+    AND tenant_id = (SELECT id FROM tenants WHERE parent_tenant_id IS NULL);
 ```
 
 ## 秘密鍵の暗号化キー（KEY_ENCRYPTION_KEY）をローテーションしたいとき

@@ -55,7 +55,9 @@ CREATE TABLE tenants (
     status           VARCHAR(16)  NOT NULL DEFAULT 'ACTIVE',
     -- root（parent_tenant_id IS NULL）を DB レベルで 1 行に限定するための番兵列。
     -- root のとき 1、それ以外は NULL。UNIQUE は複数 NULL を許容するため root だけが一意化される。
-    is_root          TINYINT(1)   GENERATED ALWAYS AS (IF(parent_tenant_id IS NULL, 1, NULL)) VIRTUAL,
+    -- 式が (x IS NULL) OR NULL なのは、MariaDB 10.11 が索引付き生成列で IF()/CASE を許可しない
+    -- （ERROR 1901）ため。TRUE OR NULL = 1 / FALSE OR NULL = NULL で意図した値になる。
+    is_root          TINYINT(1)   GENERATED ALWAYS AS ((parent_tenant_id IS NULL) OR NULL) VIRTUAL,
     created_at       DATETIME(6)  NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
     updated_at       DATETIME(6)  NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
     PRIMARY KEY (id),
