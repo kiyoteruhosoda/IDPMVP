@@ -21,6 +21,7 @@ pub mod passkey_registration;
 pub mod permission_management;
 pub mod register;
 pub mod revocation;
+pub mod tenant_resolution;
 pub mod totp_registration;
 pub mod token;
 pub mod userinfo;

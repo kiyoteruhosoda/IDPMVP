@@ -2,6 +2,28 @@
 
 完了した重要な変更の要約（詳しい経緯は `history/`、設計判断は `adr/`）。
 
+## 2026-07-10（MT6: 汎用 TTL キャッシュ抽象 + TenantResolver + 権限解決のキャッシュ化）
+
+- **汎用 TTL キャッシュ抽象**（ADR-0009 §7）: `domain::cache::Cache<K, V>` trait（`get`/`insert`/
+  `invalidate`）と `infrastructure::cache::InMemoryTtlCache`（TTL 判定・`get` 時の期限切れ遅延削除、
+  `Clock` 注入でテスト可能）を新設。`InMemoryLoginRateLimiter` と同様に trait 越しに注入し単体
+  インスタンス前提、スケールアウト時は共有ストア実装へ差し替える。用途ごとに別インスタンス（別キー
+  空間）を注入する。TTL は `TENANT_CACHE_TTL_SECS`／`PERMISSION_CACHE_TTL_SECS`（既定 60 秒）。
+- **scope→権限解決のキャッシュ化**: `CachedUserPermissionRepository` デコレータが `has_permission`
+  の判定結果を TTL キャッシュし、`grant`/`revoke` 時に該当キー（`(tenant_id, user_id, code)`）を
+  即時 invalidate する。`AppState::build` で `SqlxUserPermissionRepository` をラップし、判定
+  （`AdminAccessService`）と変更（`PermissionManagementService`）が同一インスタンスを共有するため
+  付与直後の反映漏れ（stale allow/deny）が起きない。
+- **TenantResolver middleware**（ADR-0009 §7）: `application::tenant_resolution::TenantResolutionService`
+  が id → tenant を TTL キャッシュ（テナント実体を格納し、有効性は取り出し後に判定）付きで解決し、
+  `presentation::tenant` に `ResolvedTenant` 型と axum middleware `resolve_tenant` を追加。パスの
+  `:tenant_id` を UUID として解決し、UUID 不正・未知・`DISABLED` は一律 404、`ACTIVE` は
+  `Extension<ResolvedTenant>` を注入する。root も同一経路で解決し特別分岐なし。
+- **過渡期（MT9 まで）**: `/{tenant_id}/...` ルーティングは未導入のため本 middleware はまだルーターへ
+  mount せず、api は引き続き `AppState::default_tenant`（root）を全リクエストへ適用する。`Cache` 基盤と
+  解決サービスは `AppState`（`tenant_resolution`）へ配線済みで、MT9 が middleware をテナントルート群へ
+  付与し、`RequirePerms` の要求テナントを `default_tenant` からパス由来 `ResolvedTenant` へ置き換える。
+
 ## 2026-07-10（MT5: 全 Repository trait／ユースケースへ tenant_id 追加 — テナント分離の強制）
 
 - **Repository trait のテナントスコープ化**（ADR-0009 §8。MariaDB に RLS がないため、アプリ層が

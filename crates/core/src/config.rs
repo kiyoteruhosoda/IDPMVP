@@ -41,6 +41,10 @@ pub struct Config {
     id_token_ttl: Duration,
     refresh_token_ttl: Duration,
     clock_skew: Duration,
+    /// テナント解決キャッシュの TTL（ADR-0009 §7。id → tenant のホットパス）。
+    tenant_cache_ttl: Duration,
+    /// scope→権限解決キャッシュの TTL（ADR-0009 §7。付与・剥奪時は即時 invalidate される）。
+    permission_cache_ttl: Duration,
     cookie_secure: bool,
     key_encryption_key: [u8; 32],
     key_encryption_key_is_dev: bool,
@@ -85,6 +89,10 @@ impl Config {
             // Refresh Token は既定 30 日（offline_access scope で発行。rotation あり）。
             refresh_token_ttl: secs(env_parse("REFRESH_TOKEN_TTL_SECS", 2_592_000)?),
             clock_skew: secs(env_parse("CLOCK_SKEW_SECS", 60)?),
+            // 解決キャッシュの TTL（既定 60 秒）。付与・剥奪・テナント更新時は明示 invalidate するため、
+            // TTL は「invalidate 経路の無い変更（DB 直接操作等）に対する最大許容ラグ」を表す。
+            tenant_cache_ttl: secs(env_parse("TENANT_CACHE_TTL_SECS", 60)?),
+            permission_cache_ttl: secs(env_parse("PERMISSION_CACHE_TTL_SECS", 60)?),
             cookie_secure,
             key_encryption_key,
             key_encryption_key_is_dev,
@@ -135,6 +143,14 @@ impl Config {
     }
     pub fn clock_skew(&self) -> Duration {
         self.clock_skew
+    }
+    /// テナント解決キャッシュ（id → tenant）の TTL（ADR-0009 §7）。
+    pub fn tenant_cache_ttl(&self) -> Duration {
+        self.tenant_cache_ttl
+    }
+    /// scope→権限解決キャッシュ（`has_permission`）の TTL（ADR-0009 §7）。
+    pub fn permission_cache_ttl(&self) -> Duration {
+        self.permission_cache_ttl
     }
     /// Cookie に `Secure` 属性を付けるか（設計仕様 §2.4。開発時の http issuer では無効化できる）。
     pub fn cookie_secure(&self) -> bool {

@@ -30,19 +30,26 @@ use crate::application::passkey_registration::PasskeyRegistrationService;
 use crate::application::permission_management::PermissionManagementService;
 use crate::application::register::RegisterService;
 use crate::application::revocation::RevocationService;
+use crate::application::tenant_resolution::TenantResolutionService;
 use crate::application::token::TokenService;
 use crate::application::totp_registration::TotpRegistrationService;
 use crate::application::userinfo::UserInfoService;
 use crate::config::Config;
+use crate::domain::cache::Cache;
 use crate::domain::clock::Clock;
 use crate::domain::id_generator::IdGenerator;
-use crate::domain::tenant::TenantId;
+use crate::domain::repositories::UserPermissionRepository;
+use crate::domain::tenant::{Tenant, TenantId};
 use crate::domain::tenant_context::TenantContext;
+use crate::infrastructure::cache::InMemoryTtlCache;
 use crate::infrastructure::db::Db;
 use crate::infrastructure::id_generator::UuidV7Generator;
 use crate::infrastructure::password::Argon2PasswordHasher;
 use crate::infrastructure::rate_limit::InMemoryLoginRateLimiter;
 use crate::infrastructure::repositories::audit_log::{SqlxAuditLogQuery, SqlxAuditLogSink};
+use crate::infrastructure::repositories::cached_user_permission::{
+    CachedUserPermissionRepository, PermissionKey,
+};
 use crate::infrastructure::repositories::auth_session::SqlxAuthSessionRepository;
 use crate::infrastructure::repositories::authorization_code::SqlxAuthorizationCodeRepository;
 use crate::infrastructure::repositories::client::SqlxClientRepository;
@@ -52,6 +59,7 @@ use crate::infrastructure::repositories::refresh_token::SqlxRefreshTokenReposito
 use crate::infrastructure::repositories::revoked_access_token::SqlxRevokedAccessTokenRepository;
 use crate::infrastructure::repositories::signing_key::SqlxSigningKeyRepository;
 use crate::infrastructure::repositories::sso_session::SqlxSsoSessionRepository;
+use crate::infrastructure::repositories::tenant::SqlxTenantRepository;
 use crate::infrastructure::repositories::tenant_membership::SqlxTenantMembershipRepository;
 use crate::infrastructure::repositories::totp_secret::SqlxTotpSecretRepository;
 use crate::infrastructure::repositories::user::SqlxUserRepository;
@@ -71,6 +79,8 @@ pub struct AppState {
     pub config: Arc<Config>,
     /// 過渡期（MT9 まで）の既定テナント（root）。全リクエストをこのテナントの文脈で処理する。
     pub default_tenant: TenantContext,
+    /// テナント解決（id → tenant）。`TenantResolver` middleware が使う（MT9 でルーターへ mount）。
+    pub tenant_resolution: Arc<TenantResolutionService>,
     pub register: Arc<RegisterService>,
     pub authorize: Arc<AuthorizeService>,
     pub login: Arc<LoginService>,
@@ -111,7 +121,18 @@ impl AppState {
         let refresh_tokens = Arc::new(SqlxRefreshTokenRepository::new(pool.clone()));
         let revoked_access_tokens = Arc::new(SqlxRevokedAccessTokenRepository::new(pool.clone()));
         let signing_keys = Arc::new(SqlxSigningKeyRepository::new(pool.clone()));
-        let user_permissions = Arc::new(SqlxUserPermissionRepository::new(pool.clone()));
+        let tenants = Arc::new(SqlxTenantRepository::new(pool.clone()));
+        // scope→権限解決（ADR-0009 §7）: `has_permission` の判定結果を TTL キャッシュし、付与・剥奪時に
+        // invalidate する。判定（admin_access）と変更（permissions_admin）が同一インスタンスを共有する
+        // ため、付与直後の反映漏れ（stale allow/deny）を避けられる。
+        let permission_cache: Arc<dyn Cache<PermissionKey, bool>> = Arc::new(
+            InMemoryTtlCache::new(chrono_from_std(config.permission_cache_ttl()), clock.clone()),
+        );
+        let user_permissions: Arc<dyn UserPermissionRepository> =
+            Arc::new(CachedUserPermissionRepository::new(
+                Arc::new(SqlxUserPermissionRepository::new(pool.clone())),
+                permission_cache,
+            ));
         let client_consents = Arc::new(SqlxClientConsentRepository::new(pool.clone()));
         let totp_secrets = Arc::new(SqlxTotpSecretRepository::new(pool.clone()));
         let webauthn_credentials = Arc::new(SqlxWebAuthnCredentialRepository::new(pool.clone()));
@@ -239,6 +260,14 @@ impl AppState {
             clock.clone(),
         ));
 
+        // テナント解決（ADR-0009 §7）: id → tenant のホットパスを TTL キャッシュ + 更新時 invalidation で
+        // 抑える。MT9 で `TenantResolver` middleware がこのサービスをルーターへ mount する。
+        let tenant_cache: Arc<dyn Cache<TenantId, Tenant>> = Arc::new(InMemoryTtlCache::new(
+            chrono_from_std(config.tenant_cache_ttl()),
+            clock.clone(),
+        ));
+        let tenant_resolution = Arc::new(TenantResolutionService::new(tenants, tenant_cache));
+
         // F4: Logout（RP-initiated / front-channel / back-channel）。
         let logout = Arc::new(LogoutService::new(
             sso_sessions.clone(),
@@ -319,6 +348,7 @@ impl AppState {
             pool,
             config,
             default_tenant: TenantContext::new(default_tenant),
+            tenant_resolution,
             register,
             authorize,
             login,
@@ -341,6 +371,12 @@ impl AppState {
             passkey_authentication,
         }
     }
+}
+
+/// 設定値（`std::time::Duration`）を解決キャッシュの TTL（`chrono::Duration`）へ変換する。
+/// TTL は秒精度で扱うため丸めは問題にならない（オーバーフロー時は上限に飽和させる）。
+fn chrono_from_std(d: std::time::Duration) -> chrono::Duration {
+    chrono::Duration::from_std(d).unwrap_or(chrono::Duration::MAX)
 }
 
 impl FromRef<AppState> for Db {
