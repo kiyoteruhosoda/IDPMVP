@@ -28,6 +28,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde_json::json;
+use std::collections::HashMap;
 
 /// `TenantResolver` が解決した処理対象テナント（`Extension` として注入される）。
 ///
@@ -55,14 +56,25 @@ impl ResolvedTenant {
     }
 }
 
-/// テナント解決 middleware 本体（`from_fn_with_state` で使う）。MT9 でテナントルート群へ付与する。
+/// テナント解決 middleware 本体（`from_fn_with_state` で使う）。`/{tenant_id}/...` 配下の
+/// テナントルート群へ `route_layer` で付与する。ネストしたルートは複数のパスパラメータ
+/// （例: `{tenant_id}` と `{client_id}`）を持ちうるため、`tenant_id` を名前で取り出す。
 pub async fn resolve_tenant(
     State(state): State<AppState>,
-    Path(raw_tenant_id): Path<String>,
+    Path(params): Path<HashMap<String, String>>,
     mut request: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> Response {
-    let resolved = match resolve(&state.tenant_resolution, &raw_tenant_id).await {
+    let Some(raw_tenant_id) = params.get("tenant_id") else {
+        // ルート定義に `{tenant_id}` セグメントが無い（配線ミス）。500 に倒す。
+        tracing::error!("resolve_tenant mounted on a route without a {{tenant_id}} segment");
+        return error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "server_error",
+            "tenant segment missing",
+        );
+    };
+    let resolved = match resolve(&state.tenant_resolution, raw_tenant_id).await {
         Ok(resolved) => resolved,
         Err(rejection) => return rejection,
     };
@@ -93,6 +105,23 @@ async fn resolve(
                 "tenant resolution failed",
             ))
         }
+    }
+}
+
+/// 内部 API（`/internal/*`。テナントプレフィクス無し。ADR-0009 §8）のテナントを、web が DTO で送る
+/// `tenant_id` から解決する。過渡期（web がテナント経路化されるまで）は未指定・不正を許容し、
+/// 既定テナント（root）へフォールバックする。`(tenant_id, email)` 一意化により、正しい tenant_id が
+/// 送られれば所属元テナント限定の認証が成立する。
+pub fn internal_tenant(state: &AppState, raw_tenant_id: Option<&str>) -> TenantContext {
+    match raw_tenant_id.filter(|s| !s.is_empty()) {
+        Some(raw) => match uuid::Uuid::parse_str(raw) {
+            Ok(id) => TenantContext::new(id.into()),
+            Err(_) => {
+                tracing::warn!(tenant_id = raw, "invalid tenant_id in internal request; using default tenant");
+                state.default_tenant
+            }
+        },
+        None => state.default_tenant,
     }
 }
 

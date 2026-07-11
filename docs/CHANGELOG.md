@@ -2,6 +2,26 @@
 
 完了した重要な変更の要約（詳しい経緯は `history/`、設計判断は `adr/`）。
 
+## 2026-07-10（MT9・MT10: `/{tenant_id}/...` ルーティング + TenantResolver mount + web テナント伝搬）
+
+- **MT9 — api テナントルーティング**（ADR-0009 §6・§7）: テナントスコープの api エンドポイント
+  （`authorize`/`token`/`userinfo`/`introspect`/`revoke`/`logout`/`.well-known/*`/`auth/register`/`admin/*`）を
+  `/{tenant_id}/...` 配下へ再構成し、`resolve_tenant` middleware を `route_layer` で mount した。テナント外パス
+  （`healthz`/`readyz`/`internal/*`/`api/docs`）はプレフィクス無しで据え置き。各ハンドラと `RequirePerms`
+  extractor は `state.default_tenant` から**パス由来の `Extension<ResolvedTenant>`** へ移行し、要求テナントは
+  URL から解決する。ネスト経路では `tenant_id` が先頭パスパラメータになるため、ドメインパラメータを取る
+  ハンドラの `Path` 抽出子を `(tenant_id, ...)` タプルへ更新した。UUID 不正・未知・DISABLED は一律 404。
+- **MT10 — contracts DTO + web api_client テナント対応**（ADR-0009 §8）: 内部認証 API の DTO
+  （`InternalAuthenticate*`/`InternalConsent*`/`InternalVerifyTotp`/`InternalPasskeyLoginComplete`/
+  `InternalLogout`）へ `tenant_id: Option<String>` を追加。api 内部ハンドラは DTO 由来テナントを使い、未指定は
+  既定テナント（root）へフォールバックする（過渡期。`(tenant_id, email)` 一意化）。web `api_client.rs` は
+  `/internal/root-tenant`（新設・サービストークン保護）で root テナント UUID を遅延解決・キャッシュし、
+  `/{tenant_id}/admin/*` パスに前置する。
+- **過渡期（web の画面テナント経路化＝MT13 まで）**: web の画面 URL・テンプレートは従来どおりフラット
+  （`/login`・`/admin/console/*`）のままで、管理コンソールは root テナントを対象とする。api の
+  `/{tenant_id}/authorize` は引き続き `/login`（web・フラット）へ 302 する。統合テスト・`scripts/e2e.sh` の
+  ダイレクト api 呼び出しは `/{root_uuid}/...` へ追随した。
+
 ## 2026-07-10（MT8: 招待ユースケース + OIDC フローのメンバーシップ判定）
 
 - **招待ユースケース**（ADR-0009 §3。`application::invitation::InvitationService`）:
