@@ -113,6 +113,10 @@ pub struct MemberView {
 pub struct InvitationCreatedView {
     pub token: String,
     pub expires_at: String,
+    /// 招待メール（承諾リンク）を送信できたか（MT17）。false なら手動でトークンを伝達する。
+    pub email_sent: bool,
+    /// 被招待者のメールアドレス（送信先の確認表示用）。
+    pub invitee_email: String,
 }
 
 /// テナントの公開表現（`GET/PATCH /admin/settings/tenant` の応答。MT14）。
@@ -120,6 +124,9 @@ pub struct InvitationCreatedView {
 pub struct TenantView {
     pub id: String,
     pub name: String,
+    /// 自己登録（`/auth/register`）を許可するか（SEC6。既定は無効）。
+    #[serde(default)]
+    pub self_registration_enabled: bool,
     /// `ACTIVE` または `DISABLED`。
     pub status: String,
 }

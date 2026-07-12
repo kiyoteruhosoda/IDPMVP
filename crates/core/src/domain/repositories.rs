@@ -26,6 +26,7 @@ use crate::domain::client::Client;
 use crate::domain::consent::ClientConsent;
 use crate::domain::error::Result;
 use crate::domain::passkey_challenge::PasskeyChallenge;
+use crate::domain::password_reset::PasswordResetToken;
 use crate::domain::refresh_token::RefreshToken;
 use crate::domain::revoked_access_token::RevokedAccessToken;
 use crate::domain::signing_key::SigningKey;
@@ -56,6 +57,27 @@ pub trait TenantRepository: Send + Sync {
     /// テナントを削除する。「配下に子テナントが無く、当該テナント自身にユーザー/クライアントが
     /// 存在しない」ことは呼び出し側が事前検証する（DB も `ON DELETE RESTRICT` で保護する）。
     async fn delete(&self, id: TenantId) -> Result<()>;
+}
+
+/// テナント開通（ADR-0009 §5）のトランザクション境界（unit of work）。
+///
+/// テナント作成は「テナント行・初期管理者ユーザー・HOME メンバーシップ・`idp.tenant.admin` 付与」の
+/// 4 行が揃って初めて意味を持つ（どれか欠けると管理者のいないテナント＝孤立テナントが残る）。
+/// 本ポートはこの集約を**単一トランザクションで**永続化し、途中失敗時は全体をロールバックする（REF2）。
+/// ドメインオブジェクトの構築・検証は Application 層の責務で、実装は永続化のみを担う。
+#[async_trait]
+pub trait TenantProvisioningRepository: Send + Sync {
+    /// テナント・初期管理者・HOME メンバーシップ・権限付与を原子的に永続化する。
+    /// 一意制約違反（email / preferred_username / root 重複）は `Conflict`、
+    /// `admin_permission_code` が `permissions` マスタに無い場合は `InvalidValue` を返す。
+    async fn provision(
+        &self,
+        tenant: &Tenant,
+        admin: &User,
+        admin_membership: &TenantMembership,
+        admin_permission_code: &str,
+        granted_at: DateTime<Utc>,
+    ) -> Result<()>;
 }
 
 /// テナントメンバーシップ（招待・ゲスト参加。ADR-0009 §3）の永続化。
@@ -173,6 +195,23 @@ pub trait AuthorizationCodeRepository: Send + Sync {
     ) -> Result<Option<AuthorizationCode>>;
     /// ログアウト時にユーザーの未消費・期限内の全 code を即時失効させる（`used_at` を設定）。
     async fn revoke_all_active_for_user(&self, user_id: Uuid, now: DateTime<Utc>) -> Result<()>;
+}
+
+/// パスワードリセットトークン（MT18）の永続化。DB には SHA-256 hash のみ保存する。
+/// ユーザー単位のセキュリティ操作のため tenant_id は取らない（モジュールコメント参照。
+/// テナント境界はユースケース側が `users.tenant_id` 照合で強制する）。
+#[async_trait]
+pub trait PasswordResetTokenRepository: Send + Sync {
+    async fn create(&self, token: &PasswordResetToken) -> Result<()>;
+    /// 原子的に one-time 消費する。未使用かつ期限内なら `used_at` を設定して当該行を返す。
+    /// 使用済み・期限切れ・不存在は `None`。
+    async fn consume(
+        &self,
+        token_hash: &str,
+        used_at: DateTime<Utc>,
+    ) -> Result<Option<PasswordResetToken>>;
+    /// 当該ユーザーの未使用トークンをすべて失効させる（`used_at` を設定。再発行時の置き換えに使う）。
+    async fn invalidate_all_for_user(&self, user_id: Uuid, now: DateTime<Utc>) -> Result<()>;
 }
 
 #[async_trait]

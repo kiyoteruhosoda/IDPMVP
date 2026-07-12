@@ -291,6 +291,8 @@ pub struct TenantResponse {
     pub name: String,
     /// `ACTIVE` または `DISABLED`。
     pub status: String,
+    /// 自己登録（`/auth/register`）を許可するか（SEC6。既定は無効）。
+    pub self_registration_enabled: bool,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -312,6 +314,9 @@ pub struct TenantCreatedResponse {
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct UpdateTenantSettingsRequest {
     pub name: String,
+    /// 自己登録トグル（SEC6）。省略時は現状維持。
+    #[serde(default)]
+    pub self_registration_enabled: Option<bool>,
 }
 
 // --- システム設定（SMTP 等。root/idp.system.admin のみ。MT14） -----------------------------
@@ -393,13 +398,18 @@ pub struct CreateInvitationRequest {
     pub user_id: String,
 }
 
-/// 招待作成レスポンス。`token` は平文の招待トークンで、**この応答でのみ**返る（管理者が被招待者へ別途
-/// 通知する。ログ・監査には出さない。ADR-0009 §3）。
+/// 招待作成レスポンス。`token` は平文の招待トークンで、**この応答でのみ**返る（メール未達時に管理者が
+/// 被招待者へ別途通知する。ログ・監査には出さない。ADR-0009 §3）。
 #[derive(Debug, Serialize, ToSchema)]
 pub struct InvitationCreatedResponse {
     pub token: String,
     /// 招待の失効時刻（RFC3339）。
     pub expires_at: String,
+    /// 招待メール（承諾リンク）を被招待者へ送信できたか（MT17）。SMTP 未設定・送信失敗は false
+    /// （招待は成立しており、管理者が token を手動で伝達する）。
+    pub email_sent: bool,
+    /// 被招待者のメールアドレス（送信先の確認表示用）。
+    pub invitee_email: String,
 }
 
 /// 招待承諾リクエスト（`POST /{tenant_id}/invitations/accept`）。ログイン済み利用者がトークンを提示する。

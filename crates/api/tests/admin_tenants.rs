@@ -130,3 +130,84 @@ async fn root_system_admin_can_create_tenant_with_generated_admin() {
         "tenant admin cannot create tenants (system.admin is root-scoped only)"
     );
 }
+
+/// テナント開通 unit of work（REF2）: 途中で失敗した場合、テナント・ユーザー・メンバーシップの
+/// **どの行も残らない**（単一トランザクションで全ロールバック）。最終ステップの権限付与を
+/// `permissions` マスタに無いコードで失敗させ、先行 3 INSERT が巻き戻ることを実 DB で検証する。
+#[tokio::test]
+async fn provisioning_rolls_back_all_rows_when_a_step_fails() {
+    use idp_api::domain::repositories::TenantProvisioningRepository;
+    use idp_api::domain::tenant::{Tenant, TenantId};
+    use idp_api::domain::tenant_membership::TenantMembership;
+    use idp_api::domain::user::User;
+    use idp_api::domain::values::{TenantStatus, UserStatus};
+    use idp_api::infrastructure::repositories::tenant_provisioning::SqlxTenantProvisioningRepository;
+
+    let Some(env) = support::setup("admin tenants rollback").await else {
+        return;
+    };
+    let now = chrono::Utc::now();
+    let parent = TenantId::from(uuid::Uuid::parse_str(&env.root_tenant_id).unwrap());
+    let tenant = Tenant {
+        id: TenantId::from(uuid::Uuid::now_v7()),
+        parent_tenant_id: Some(parent),
+        name: "Rollback Probe".to_string(),
+        status: TenantStatus::Active,
+        self_registration_enabled: false,
+        created_at: now,
+        updated_at: now,
+    };
+    let admin = User {
+        id: uuid::Uuid::now_v7(),
+        tenant_id: tenant.id,
+        sub: uuid::Uuid::now_v7(),
+        email: "rollback@probe.example.com".to_string(),
+        email_verified: false,
+        preferred_username: None,
+        name: None,
+        password_hash: "unused-hash".to_string(),
+        must_change_password: true,
+        status: UserStatus::Active,
+        failed_login_count: 0,
+        locked_until: None,
+        created_at: now,
+        updated_at: now,
+    };
+    let membership = TenantMembership::new_home(tenant.id, admin.id, now);
+
+    let provisioning = SqlxTenantProvisioningRepository::new(env.pool.clone());
+    let result = provisioning
+        .provision(
+            &tenant,
+            &admin,
+            &membership,
+            "idp.no.such.permission", // permissions マスタに無いコード → FK 違反で最終 INSERT が失敗
+            now,
+        )
+        .await;
+    assert!(result.is_err(), "unknown permission code must fail");
+
+    // 先行して INSERT したテナント・ユーザー・メンバーシップも一切残らない（全ロールバック）。
+    let tenant_rows: i64 = sqlx::query("SELECT COUNT(*) AS c FROM tenants WHERE id = ?")
+        .bind(tenant.id.as_uuid().to_string())
+        .fetch_one(&env.pool)
+        .await
+        .expect("tenant count")
+        .get::<i64, _>("c");
+    assert_eq!(tenant_rows, 0, "tenant row rolled back");
+    let user_rows: i64 = sqlx::query("SELECT COUNT(*) AS c FROM users WHERE id = ?")
+        .bind(admin.id.to_string())
+        .fetch_one(&env.pool)
+        .await
+        .expect("user count")
+        .get::<i64, _>("c");
+    assert_eq!(user_rows, 0, "admin user row rolled back");
+    let membership_rows: i64 =
+        sqlx::query("SELECT COUNT(*) AS c FROM tenant_memberships WHERE user_id = ?")
+            .bind(admin.id.to_string())
+            .fetch_one(&env.pool)
+            .await
+            .expect("membership count")
+            .get::<i64, _>("c");
+    assert_eq!(membership_rows, 0, "membership row rolled back");
+}

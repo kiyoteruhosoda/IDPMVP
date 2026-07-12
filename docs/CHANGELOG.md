@@ -2,6 +2,50 @@
 
 完了した重要な変更の要約（詳しい経緯は `history/`、設計判断は `adr/`）。
 
+## 2026-07-12（MT18: パスワードリセット / SEC6: 自己登録の制御）
+
+- **MT18 — セルフサービス・パスワードリセット（忘失時）**: ログイン画面の「パスワードをお忘れですか」
+  から、メールアドレス入力 → リセットリンク付きメール（MT17 の `Mailer`＋MT14 の SMTP 設定を再利用）→
+  リンク先（`/{tenant_id}/password-reset`）で新パスワード設定。
+  - 列挙防止: 要求はアカウントの有無・状態・送信結果に関わらず同一応答（`accepted`）。SMTP 未設定のみ
+    `unavailable`（アカウント非依存）。IP 単位のレート制限（15 分 5 回）。
+  - トークン: 32 バイト・SHA-256 ハッシュのみ保存（`password_reset_tokens`。migration 0005）・
+    TTL 既定 1 時間（`PASSWORD_RESET_TTL_SECS`）・単回消費・再要求で旧トークン失効。
+  - リセット成功時は SSO セッション・refresh token・未消費 authorization code をユーザー単位で全失効。
+    トークン・メールアドレスはログ・監査に出さない（監査は `password_reset.requested/completed`）。
+  - インプロセス SMTP サーバとの E2E 統合テスト（要求 → メール受信 → リセット → 単回消費・全失効）付き。
+- **SEC6 — 自己登録（`/auth/register`）の制御**: 全テナント無条件開放だった自己登録を、テナント設定
+  `self_registration_enabled`（migration 0004。**既定 OFF** = fail-closed）で切り替え可能にし、IP 単位の
+  レート制限（5 分 10 回、429）を追加。無効テナントでは 403 になり、409 応答によるテナント内メール
+  存在の列挙は「有効化したテナントで、レート制限の範囲内」でのみ可能に縮小（完全な秘匿はメール検証
+  = SEC6b で対応）。トグルは設定画面のテナント設定区画（`idp.tenant.admin`）から変更する。
+
+## 2026-07-12（MT17: 招待のメール配送）
+
+- **MT17 — ゲスト招待の承諾リンクをメールで配送**: 招待作成（`POST /{tenant_id}/admin/invitations`）
+  時に、システム設定の SMTP（MT14）で被招待者へ承諾リンク付きメールを自動送信する。SMTP 未設定・
+  送信失敗時は従来どおりトークンの手動伝達（best-effort。応答・結果画面の `email_sent` で成否を報告）。
+  - ドメインポート `Mailer`（送信ごとに SMTP 接続情報を受け取る）＋ lettre（rustls）実装を新設。
+    `use_tls` は 465 = implicit TLS／それ以外 = STARTTLS 必須。インプロセス SMTP サーバとの実対話
+    テストで検証。
+  - `SystemSettingsService::smtp_server()`（復号済み接続情報。表示用 `get_smtp` とは別）を追加。
+  - web に承諾画面 `GET/POST /{tenant_id}/invitations/accept` を新設（メールリンクの着地点。
+    未ログイン時は所属元テナントでのログインを案内）。招待結果画面にメール送信の成否を表示。
+  - 承諾リンクの土台 URL は `PUBLIC_WEB_BASE_URL`（既定 = `ISSUER`。単一オリジン構成 ADR-0007）。
+  - メール文言は MT19（API 多言語化）まで日英併記の固定文。
+
+## 2026-07-12（REF2: テナント開通のトランザクション境界）
+
+- **REF2 — テナント作成の unit of work 導入**: `create_tenant` が「tenant INSERT → 管理者作成 →
+  HOME メンバーシップ → 権限付与」を個別実行しており、途中失敗で管理者のいないテナント（孤立
+  テナント）が残り得た。ドメインポート `TenantProvisioningRepository::provision` を新設し、4 行を
+  **単一トランザクション**で永続化（途中失敗は全ロールバック。sqlx 実装は各リポジトリと同一の
+  INSERT SQL を executor 汎用ヘルパで共用）。`UserManagementService` は構築（検証・パスワード
+  生成・ハッシュ化）だけを行う `prepare_user` を分離し、`create_user` と テナント開通の双方が同じ
+  構築ロジックを通る（単一の出所は維持）。権限付与が判定キャッシュを迂回する点は、新規生成 ID の
+  ためキャッシュに該当キーが存在し得ず安全。実 DB のロールバック検証を `admin_tenants` 統合テストに
+  追加。
+
 ## 2026-07-12（セキュリティ改修: MT16 レビュー指摘の解消）
 
 - **SEC3 — web（HTML 側）へセキュリティヘッダ付与**: ログイン画面・管理コンソールの全レスポンスに

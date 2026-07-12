@@ -58,31 +58,39 @@ fn map_row(row: &MySqlRow) -> Result<TenantMembership> {
     })
 }
 
+/// tenant_memberships への INSERT（プール直接実行と provisioning トランザクションで共用する）。
+pub(crate) async fn insert_membership<'e>(
+    executor: impl sqlx::Executor<'e, Database = sqlx::MySql>,
+    membership: &TenantMembership,
+) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO tenant_memberships \
+         (tenant_id, user_id, membership_type, status, invited_by, \
+          invitation_token_hash, invitation_expires_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(membership.tenant_id.as_uuid().to_string())
+    .bind(membership.user_id.to_string())
+    .bind(membership.membership_type.as_str())
+    .bind(membership.status.as_str())
+    .bind(membership.invited_by.map(|u| u.to_string()))
+    .bind(&membership.invitation_token_hash)
+    .bind(membership.invitation_expires_at.map(|t| t.naive_utc()))
+    .execute(executor)
+    .await
+    .map_err(|e| match &e {
+        sqlx::Error::Database(db) if db.is_unique_violation() => {
+            DomainError::Conflict("membership already exists".to_string())
+        }
+        _ => DomainError::Repository(e.to_string()),
+    })?;
+    Ok(())
+}
+
 #[async_trait]
 impl TenantMembershipRepository for SqlxTenantMembershipRepository {
     async fn create(&self, membership: &TenantMembership) -> Result<()> {
-        sqlx::query(
-            "INSERT INTO tenant_memberships \
-             (tenant_id, user_id, membership_type, status, invited_by, \
-              invitation_token_hash, invitation_expires_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
-        )
-        .bind(membership.tenant_id.as_uuid().to_string())
-        .bind(membership.user_id.to_string())
-        .bind(membership.membership_type.as_str())
-        .bind(membership.status.as_str())
-        .bind(membership.invited_by.map(|u| u.to_string()))
-        .bind(&membership.invitation_token_hash)
-        .bind(membership.invitation_expires_at.map(|t| t.naive_utc()))
-        .execute(&self.pool)
-        .await
-        .map_err(|e| match &e {
-            sqlx::Error::Database(db) if db.is_unique_violation() => {
-                DomainError::Conflict("membership already exists".to_string())
-            }
-            _ => DomainError::Repository(e.to_string()),
-        })?;
-        Ok(())
+        insert_membership(&self.pool, membership).await
     }
 
     async fn find(&self, tenant_id: TenantId, user_id: Uuid) -> Result<Option<TenantMembership>> {

@@ -248,6 +248,48 @@ pub struct InvitationCreated<'a> {
     pub admin: Admin<'a>,
     pub token: &'a str,
     pub expires_at: &'a str,
+    /// 招待メール（承諾リンク）を送信できたか（MT17）。false ならトークンの手動伝達を促す。
+    pub email_sent: bool,
+    pub invitee_email: &'a str,
+}
+
+/// パスワードリセット要求画面（`GET/POST /{tenant_id}/forgot-password`。MT18）。未ログイン経路。
+/// 要求受理後はアカウントの有無を問わず同じ完了文言を表示する（列挙防止）。
+#[derive(Template)]
+#[template(path = "forgot_password.html")]
+pub struct ForgotPassword<'a> {
+    pub messages: &'a Messages,
+    /// 要求を受理した後の完了表示。
+    pub accepted: bool,
+    pub error_key: Option<&'a str>,
+}
+
+/// パスワード再設定画面（`GET/POST /{tenant_id}/password-reset?token=...`。MT18）。
+/// リセットメールのリンクから開く。
+#[derive(Template)]
+#[template(path = "password_reset.html")]
+pub struct PasswordReset<'a> {
+    pub messages: &'a Messages,
+    pub tenant_prefix: &'a str,
+    pub show_form: bool,
+    pub token: &'a str,
+    pub success: bool,
+    pub error_key: Option<&'a str>,
+}
+
+/// 招待承諾画面（`GET/POST /{tenant_id}/invitations/accept`。MT17）。被招待者本人が招待メールの
+/// リンクから開く。共通レイアウト（管理コンソール）には載せない。
+#[derive(Template)]
+#[template(path = "invitation_accept.html")]
+pub struct InvitationAccept<'a> {
+    pub messages: &'a Messages,
+    /// 承諾フォームを表示するか（SSO ログイン済みのときのみ true）。
+    pub show_form: bool,
+    pub token: &'a str,
+    pub csrf: &'a str,
+    /// 承諾に成功したか（成功画面表示）。
+    pub success: bool,
+    pub error_key: Option<&'a str>,
 }
 
 /// クライアント登録・編集フォームの入力値（新規/再表示の両方で使う）。テンプレートの再入力欄へ
@@ -359,6 +401,8 @@ pub struct AdminSettings<'a> {
     pub tenant_id: &'a str,
     pub tenant_name: &'a str,
     pub tenant_status: &'a str,
+    /// 自己登録（/auth/register）の許可トグル（SEC6）。
+    pub tenant_self_registration: bool,
     pub csrf: &'a str,
     /// 保存成功のバナー表示。
     pub saved: bool,

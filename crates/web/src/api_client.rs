@@ -26,6 +26,8 @@ use idp_contracts::auth::{
     InternalPasskeyLoginBeginRequest, InternalPasskeyLoginBeginResponse,
     InternalPasskeyLoginCompleteRequest, InternalPasskeyLoginCompleteResponse,
     InternalPasskeyRegisterBeginRequest, InternalPasskeyRegisterBeginResponse,
+    InternalPasswordResetCompleteRequest, InternalPasswordResetCompleteResponse,
+    InternalPasswordResetRequestRequest, InternalPasswordResetRequestResponse,
     InternalPasskeyRegisterCompleteRequest, InternalPasskeyRegisterCompleteResponse,
     InternalTotpConfirmRequest, InternalTotpConfirmResponse, InternalTotpDeleteRequest,
     InternalTotpDeleteResponse, InternalTotpSetupRequest, InternalTotpSetupResponse,
@@ -127,6 +129,26 @@ impl ApiClient {
             req,
         )
         .await
+    }
+
+    /// パスワードリセット要求（`POST /internal/password-reset/request`。MT18）。
+    pub async fn password_reset_request(
+        &self,
+        correlation_id: &str,
+        req: &InternalPasswordResetRequestRequest,
+    ) -> anyhow::Result<InternalPasswordResetRequestResponse> {
+        self.post_internal("/internal/password-reset/request", correlation_id, req)
+            .await
+    }
+
+    /// パスワードリセット実行（`POST /internal/password-reset/complete`。MT18）。
+    pub async fn password_reset_complete(
+        &self,
+        correlation_id: &str,
+        req: &InternalPasswordResetCompleteRequest,
+    ) -> anyhow::Result<InternalPasswordResetCompleteResponse> {
+        self.post_internal("/internal/password-reset/complete", correlation_id, req)
+            .await
     }
 
     /// ログアウト（`POST /internal/logout`）。api 側で SSO セッションを失効させる（Cookie 失効は web）。
@@ -594,6 +616,7 @@ impl ApiClient {
             &format!("/admin/members/{user_id}"),
             correlation_id,
             sso,
+            None,
         )
         .await
     }
@@ -613,6 +636,26 @@ impl ApiClient {
             correlation_id,
             sso,
             Some(serde_json::json!({ "user_id": user_id })),
+        )
+        .await
+    }
+
+    /// 招待の承諾（`POST /{tenant_id}/invitations/accept`）。被招待者本人の SSO Cookie を転送する
+    /// （管理 API ではないが、Cookie 転送・エラー写像は同じ共通処理を使う）。
+    pub async fn accept_invitation(
+        &self,
+        correlation_id: &str,
+        tenant_id: &str,
+        sso: &str,
+        token: &str,
+    ) -> Result<(), AdminApiError> {
+        self.admin_send_no_content(
+            Method::POST,
+            tenant_id,
+            "/invitations/accept",
+            correlation_id,
+            sso,
+            Some(serde_json::json!({ "token": token })),
         )
         .await
     }
@@ -713,6 +756,7 @@ impl ApiClient {
             &format!("/admin/signing-keys/{kid}/retire"),
             correlation_id,
             sso,
+            None,
         )
         .await
     }
@@ -731,6 +775,7 @@ impl ApiClient {
             &format!("/admin/signing-keys/{kid}"),
             correlation_id,
             sso,
+            None,
         )
         .await
     }
@@ -776,15 +821,20 @@ impl ApiClient {
         path: &str,
         correlation_id: &str,
         sso: &str,
+        body: Option<serde_json::Value>,
     ) -> Result<(), AdminApiError> {
-        let response = self
+        let mut req = self
             .http
             .request(method, format!("{}/{}{}", self.base_url, tenant_id, path))
             .header(REQUEST_ID_HEADER, correlation_id)
             .header(
                 reqwest::header::COOKIE,
                 format!("{SSO_SESSION_COOKIE}={sso}"),
-            )
+            );
+        if let Some(json) = body {
+            req = req.json(&json);
+        }
+        let response = req
             .send()
             .await
             .map_err(|e| AdminApiError::Transport(e.to_string()))?;
@@ -865,6 +915,7 @@ impl ApiClient {
         tenant_id: &str,
         sso: &str,
         name: &str,
+        self_registration_enabled: bool,
     ) -> Result<crate::admin_dto::TenantView, AdminApiError> {
         self.admin_send(
             Method::PATCH,
@@ -872,7 +923,10 @@ impl ApiClient {
             "/admin/settings/tenant",
             correlation_id,
             sso,
-            Some(serde_json::json!({ "name": name })),
+            Some(serde_json::json!({
+                "name": name,
+                "self_registration_enabled": self_registration_enabled,
+            })),
         )
         .await
     }

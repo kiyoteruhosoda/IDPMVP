@@ -26,6 +26,7 @@ use crate::application::login::LoginService;
 use crate::application::logout::LogoutService;
 use crate::application::mfa_login::MfaLoginService;
 use crate::application::passkey_authentication::PasskeyAuthenticationService;
+use crate::application::password_reset::PasswordResetService;
 use crate::application::passkey_registration::PasskeyRegistrationService;
 use crate::application::permission_management::PermissionManagementService;
 use crate::application::register::RegisterService;
@@ -46,6 +47,7 @@ use crate::domain::tenant::{Tenant, TenantId};
 use crate::infrastructure::cache::InMemoryTtlCache;
 use crate::infrastructure::db::Db;
 use crate::infrastructure::id_generator::UuidV7Generator;
+use crate::infrastructure::mailer::LettreSmtpMailer;
 use crate::infrastructure::password::Argon2PasswordHasher;
 use crate::infrastructure::rate_limit::InMemoryLoginRateLimiter;
 use crate::infrastructure::repositories::audit_log::{SqlxAuditLogQuery, SqlxAuditLogSink};
@@ -57,6 +59,7 @@ use crate::infrastructure::repositories::authorization_code::SqlxAuthorizationCo
 use crate::infrastructure::repositories::client::SqlxClientRepository;
 use crate::infrastructure::repositories::consent::SqlxClientConsentRepository;
 use crate::infrastructure::repositories::passkey_challenge::SqlxPasskeyChallengeRepository;
+use crate::infrastructure::repositories::password_reset_token::SqlxPasswordResetTokenRepository;
 use crate::infrastructure::repositories::refresh_token::SqlxRefreshTokenRepository;
 use crate::infrastructure::repositories::revoked_access_token::SqlxRevokedAccessTokenRepository;
 use crate::infrastructure::repositories::signing_key::SqlxSigningKeyRepository;
@@ -64,6 +67,7 @@ use crate::infrastructure::repositories::sso_session::SqlxSsoSessionRepository;
 use crate::infrastructure::repositories::system_setting::SqlxSystemSettingsRepository;
 use crate::infrastructure::repositories::tenant::SqlxTenantRepository;
 use crate::infrastructure::repositories::tenant_membership::SqlxTenantMembershipRepository;
+use crate::infrastructure::repositories::tenant_provisioning::SqlxTenantProvisioningRepository;
 use crate::infrastructure::repositories::totp_secret::SqlxTotpSecretRepository;
 use crate::infrastructure::repositories::user::SqlxUserRepository;
 use crate::infrastructure::repositories::user_permission::SqlxUserPermissionRepository;
@@ -75,6 +79,14 @@ use std::sync::Arc;
 /// IP 単位のログインレート制限: 5 分間で最大 30 試行（設計仕様 §4.3「IP単位でもレート制限」）。
 const LOGIN_RATE_LIMIT_MAX_ATTEMPTS: usize = 30;
 const LOGIN_RATE_LIMIT_WINDOW_MINUTES: i64 = 5;
+
+/// IP 単位の自己登録レート制限: 5 分間で最大 10 試行（SEC6。列挙・大量作成の抑止）。
+const REGISTER_RATE_LIMIT_MAX_ATTEMPTS: usize = 10;
+const REGISTER_RATE_LIMIT_WINDOW_MINUTES: i64 = 5;
+
+/// IP 単位のパスワードリセット要求レート制限: 15 分間で最大 5 試行（MT18。メール爆撃・列挙の抑止）。
+const PASSWORD_RESET_RATE_LIMIT_MAX_ATTEMPTS: usize = 5;
+const PASSWORD_RESET_RATE_LIMIT_WINDOW_MINUTES: i64 = 15;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -106,6 +118,8 @@ pub struct AppState {
     pub system_settings: Arc<SystemSettingsService>,
     /// セルフサービスのパスワード変更（ログイン済みユーザーの設定画面。MT15）。
     pub account_password: Arc<AccountPasswordService>,
+    /// セルフサービス・パスワードリセット（忘失時。メールリンク経由。MT18）。
+    pub password_reset: Arc<PasswordResetService>,
     /// ゲスト招待・メンバーシップ（ADR-0009 §3）。
     pub invitations: Arc<InvitationService>,
     pub audit_query: Arc<AuditQueryService>,
@@ -171,6 +185,26 @@ impl AppState {
             audit.clone(),
             clock.clone(),
         ));
+        // パスワードリセット（忘失時。MT18）。SMTP はシステム設定（MT14）、配送は MT17 の Mailer を
+        // 再利用する。要求は IP 単位でレート制限し、成功時は全セッション・トークンを失効させる。
+        let password_reset = Arc::new(PasswordResetService::new(
+            users.clone(),
+            Arc::new(SqlxPasswordResetTokenRepository::new(pool.clone())),
+            sso_sessions.clone(),
+            refresh_tokens.clone(),
+            codes.clone(),
+            hasher.clone(),
+            system_settings.clone(),
+            Arc::new(LettreSmtpMailer::new()),
+            Arc::new(InMemoryLoginRateLimiter::new(
+                PASSWORD_RESET_RATE_LIMIT_MAX_ATTEMPTS,
+                chrono::Duration::minutes(PASSWORD_RESET_RATE_LIMIT_WINDOW_MINUTES),
+            )),
+            audit.clone(),
+            clock.clone(),
+            config.password_reset_ttl(),
+            config.public_web_base_url().to_string(),
+        ));
         let keys = Arc::new(KeyService::new(
             signing_keys.clone(),
             clock.clone(),
@@ -183,10 +217,18 @@ impl AppState {
             config.authorization_code_ttl(),
         ));
 
+        // 自己登録（SEC6）: テナント設定トグル（既定 OFF）＋ IP 単位レート制限。ログインとは別の
+        // 制限器を使う（登録の失敗でログイン試行枠を消費させない）。
+        let register_rate_limiter = Arc::new(InMemoryLoginRateLimiter::new(
+            REGISTER_RATE_LIMIT_MAX_ATTEMPTS,
+            chrono::Duration::minutes(REGISTER_RATE_LIMIT_WINDOW_MINUTES),
+        ));
         let register = Arc::new(RegisterService::new(
             users.clone(),
             tenant_memberships.clone(),
+            tenants.clone(),
             hasher.clone(),
+            register_rate_limiter,
             clock.clone(),
             ids.clone(),
         ));
@@ -300,25 +342,30 @@ impl AppState {
             clock.clone(),
             ids.clone(),
         ));
-        // テナント作成・管理（ADR-0009 §5・§6）。初期管理者の生成は users_admin へ委譲し、新テナント
-        // scope の idp.tenant.admin 付与は同一キャッシュ付きリポジトリを共有するため判定へ即時反映される。
+        // テナント作成・管理（ADR-0009 §5・§6）。初期管理者の構築は users_admin へ委譲し、テナント・
+        // 管理者・メンバーシップ・権限付与は単一トランザクションで永続化する（unit of work。REF2）。
+        // 付与は判定キャッシュを経由しないが、新規生成 ID のため該当キーがキャッシュに載っていることはない。
         let tenants_admin = Arc::new(TenantManagementService::new(
             tenants.clone(),
             users_admin.clone(),
-            user_permissions.clone(),
+            Arc::new(SqlxTenantProvisioningRepository::new(pool.clone())),
             audit.clone(),
             clock.clone(),
             ids.clone(),
         ));
         // ゲスト招待・メンバーシップ（ADR-0009 §3）。権限は同一キャッシュ付きリポジトリを共有するため、
-        // メンバーシップ解除に伴う権限剥奪も判定キャッシュへ即時反映される。
+        // メンバーシップ解除に伴う権限剥奪も判定キャッシュへ即時反映される。招待メール（MT17）は
+        // システム設定の SMTP（MT14）で best-effort 送信し、未設定・失敗時はトークンの手動伝達に戻る。
         let invitations = Arc::new(InvitationService::new(
             users.clone(),
             tenant_memberships.clone(),
             user_permissions.clone(),
+            system_settings.clone(),
+            Arc::new(LettreSmtpMailer::new()),
             audit.clone(),
             clock.clone(),
             config.invitation_ttl(),
+            config.public_web_base_url().to_string(),
         ));
         let admin_access = Arc::new(AdminAccessService::new(
             sso_sessions.clone(),
@@ -436,6 +483,7 @@ impl AppState {
             tenants_admin,
             system_settings,
             account_password,
+            password_reset,
             invitations,
             audit_query,
             logout,
