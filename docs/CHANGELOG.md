@@ -2,6 +2,21 @@
 
 完了した重要な変更の要約（詳しい経緯は `history/`、設計判断は `adr/`）。
 
+## 2026-07-12（GAP1: ゲスト権限付与の ADR 乖離解消）
+
+- **GAP1 — 権限付与対象を「所属元照合」から「ACTIVE メンバーシップ判定」へ**（ADR-0009 §4）:
+  `PermissionManagementService::ensure_user_in_tenant` を、対象ユーザーの所属元テナント一致
+  （`users.tenant_id`）ではなく「ユーザー現存 + `TenantMembershipRepository::is_active_member`」で
+  判定するよう変更（list/grant/revoke の 3 経路すべてに適用）。
+  - 付与対象は当該テナントで **ACTIVE なメンバーシップ**（HOME / GUEST）を持つユーザーで、アカウントの
+    出自（HOME か GUEST か）では区別しない。`INVITED`（未承諾）ゲスト・テナント外ユーザーは
+    ACTIVE メンバーでないため、テナント越しの存在推測を防ぐべく従来どおり 404 に倒す。
+  - `find_user_by_identifier`（識別子検索）は所属元限定のまま維持（ゲストの識別子は所属元名前空間にあり
+    参加先での検索はホームユーザーと衝突し得るため）。GUEST への付与はメンバー一覧の `user_id` 導線を使う。
+  - negative/positive テストを追加（INVITED への付与不可・テナント外 404 維持・別テナント所属の ACTIVE
+    ゲストへの付与成功）。統合テストのユーザー生成ヘルパ（`create_plain_user`）も実運用同様に HOME
+    メンバーシップを投影するよう修正。
+
 ## 2026-07-12（MT18: パスワードリセット / SEC6: 自己登録の制御）
 
 - **MT18 — セルフサービス・パスワードリセット（忘失時）**: ログイン画面の「パスワードをお忘れですか」

@@ -328,6 +328,7 @@ impl AppState {
         ));
         let permissions_admin = Arc::new(PermissionManagementService::new(
             users.clone(),
+            tenant_memberships.clone(),
             user_permissions.clone(),
             audit.clone(),
             clock.clone(),
