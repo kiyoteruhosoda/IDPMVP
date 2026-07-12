@@ -72,6 +72,12 @@ impl Config {
                 Some(v) => (v, false),
                 None => (DEV_INTERNAL_SERVICE_TOKEN.to_string(), true),
             };
+        // 本番（https issuer）では開発用デフォルトのシークレットで起動しない（fail-fast）。
+        ensure_production_secrets(
+            &issuer,
+            key_encryption_key_is_dev,
+            internal_service_token_is_dev,
+        )?;
 
         Ok(Self {
             issuer,
@@ -198,6 +204,36 @@ fn normalize_issuer(raw: String) -> String {
     raw.trim_end_matches('/').to_string()
 }
 
+/// 本番相当（issuer が `https://`）で開発用デフォルトのシークレットが使われていたら起動を失敗させる。
+///
+/// 開発用デフォルト（`DEV_KEY_ENCRYPTION_KEY`・`DEV_INTERNAL_SERVICE_TOKEN`）はソースに埋め込まれた
+/// 既知値であり、本番で使うと署名鍵の暗号化と `/internal/*` の保護が実質無効になる。warning での
+/// 見逃しを防ぐため、http（ローカル開発）以外では設定漏れを構成エラーとして扱う。
+fn ensure_production_secrets(
+    issuer: &str,
+    key_encryption_key_is_dev: bool,
+    internal_service_token_is_dev: bool,
+) -> anyhow::Result<()> {
+    if !issuer.starts_with("https://") {
+        return Ok(());
+    }
+    if key_encryption_key_is_dev {
+        anyhow::bail!(
+            "ISSUER is https ({issuer}) but KEY_ENCRYPTION_KEY is not set; \
+             refusing to start with the built-in development key. \
+             Set KEY_ENCRYPTION_KEY (base64, 32 bytes) in production."
+        );
+    }
+    if internal_service_token_is_dev {
+        anyhow::bail!(
+            "ISSUER is https ({issuer}) but INTERNAL_SERVICE_TOKEN is not set; \
+             refusing to start with the built-in development token. \
+             Set INTERNAL_SERVICE_TOKEN (shared with web) in production."
+        );
+    }
+    Ok(())
+}
+
 /// `KEY_ENCRYPTION_KEY`（base64、32 バイト）を読み込む。未設定なら開発用デフォルトを使う。
 fn load_key_encryption_key() -> anyhow::Result<([u8; 32], bool)> {
     match env_lookup("KEY_ENCRYPTION_KEY") {
@@ -263,6 +299,17 @@ mod tests {
             normalize_issuer("https://idp.example.com".to_string()),
             "https://idp.example.com"
         );
+    }
+
+    #[test]
+    fn production_secrets_are_required_when_issuer_is_https() {
+        // https issuer + 開発用デフォルト → 構成エラー（fail-fast）。
+        assert!(ensure_production_secrets("https://idp.example.com", true, false).is_err());
+        assert!(ensure_production_secrets("https://idp.example.com", false, true).is_err());
+        // 両方明示設定されていれば https でも起動できる。
+        assert!(ensure_production_secrets("https://idp.example.com", false, false).is_ok());
+        // http（ローカル開発）は開発用デフォルトを許容する（起動時 warning のみ）。
+        assert!(ensure_production_secrets("http://localhost:8080", true, true).is_ok());
     }
 
     #[test]

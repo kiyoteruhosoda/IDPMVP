@@ -40,6 +40,8 @@ impl Config {
                 Some(v) => (v, false),
                 None => (DEV_INTERNAL_SERVICE_TOKEN.to_string(), true),
             };
+        // 本番（https issuer）では開発用デフォルトのトークンで起動しない（fail-fast。api 側と同方針）。
+        ensure_production_secrets(&issuer, internal_service_token_is_dev)?;
         Ok(Self {
             bind_addr: env_or("WEB_BIND_ADDR", "0.0.0.0:8081"),
             // api への到達先。単一オリジン構成ではプロキシ内部アドレス、ローカルでは api の直アドレス。
@@ -86,6 +88,22 @@ fn normalize_issuer(raw: String) -> String {
     raw.trim_end_matches('/').to_string()
 }
 
+/// 本番相当（issuer が `https://`）で開発用デフォルトのトークンが使われていたら起動を失敗させる。
+/// 開発用デフォルトはソースに埋め込まれた既知値であり、本番では `/internal/*` の保護が実質無効になる。
+fn ensure_production_secrets(
+    issuer: &str,
+    internal_service_token_is_dev: bool,
+) -> anyhow::Result<()> {
+    if issuer.starts_with("https://") && internal_service_token_is_dev {
+        anyhow::bail!(
+            "ISSUER is https ({issuer}) but INTERNAL_SERVICE_TOKEN is not set; \
+             refusing to start with the built-in development token. \
+             Set INTERNAL_SERVICE_TOKEN (shared with api) in production."
+        );
+    }
+    Ok(())
+}
+
 fn normalize_base_url(raw: String) -> String {
     raw.trim_end_matches('/').to_string()
 }
@@ -124,6 +142,13 @@ mod tests {
             normalize_base_url("http://api:8080/".to_string()),
             "http://api:8080"
         );
+    }
+
+    #[test]
+    fn production_secrets_are_required_when_issuer_is_https() {
+        assert!(ensure_production_secrets("https://idp.example.com", true).is_err());
+        assert!(ensure_production_secrets("https://idp.example.com", false).is_ok());
+        assert!(ensure_production_secrets("http://localhost:8080", true).is_ok());
     }
 
     #[test]

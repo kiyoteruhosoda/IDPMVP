@@ -24,7 +24,6 @@ SEC = MT16 完了時のセキュリティレビュー指摘、REF = 同リファ
 
 | 優先 | # | 概要 | 状態 | 影響度 | 工数 | 推奨モデル |
 |---|---|---|---|---|---|---|
-| 2 | SEC2 | 本番での開発用シークレット使用を fail-fast に — `KEY_ENCRYPTION_KEY`・`INTERNAL_SERVICE_TOKEN` が未設定でも既知の開発値で起動する（warning のみ）。issuer が `https` の場合は起動失敗にする | ⬜未着手 | 大 | 小 | Sonnet 5 |
 | 3 | SEC3 | web（HTML 側）へセキュリティヘッダ付与 — ログイン画面・管理コンソールに `X-Frame-Options`/`CSP`/`nosniff` が無い（クリックジャッキング）。api の `add_security_headers` 相当を web の router へ追加 | ⬜未着手 | 中 | 小 | Haiku 4.5 |
 | 4 | SEC4 | `internal_tenant` の fail-open フォールバック撤去 — `/internal/*` で `tenant_id` 不正・未指定時に root テナントへフォールバックする過渡措置（MT13 で web のテナント経路化は完了済み）。400 に倒す | ⬜未着手 | 中 | 小 | Sonnet 5 |
 | 5 | SEC5 | `ensure_active_key` の排他制御 — 複数インスタンス同時起動（ローリングデプロイ）で ACTIVE 署名鍵が複数本できる TOCTOU（MT16 のテスト並走で実際に再現）。`tenants.is_root` と同じ番兵列 + UNIQUE（要マイグレーション）または `GET_LOCK` で直列化 | ⬜未着手 | 中 | 中 | Sonnet 5 |

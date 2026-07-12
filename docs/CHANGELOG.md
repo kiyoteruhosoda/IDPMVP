@@ -4,6 +4,9 @@
 
 ## 2026-07-12（セキュリティ改修: MT16 レビュー指摘の解消）
 
+- **SEC2 — 本番での開発用シークレット使用を fail-fast 化**: `ISSUER` が `https://` のとき、
+  `KEY_ENCRYPTION_KEY`／`INTERNAL_SERVICE_TOKEN` が未設定（＝ソース埋め込みの開発用既知値）なら
+  api・web とも起動を構成エラーで失敗させる。http（ローカル開発）は従来どおり warning のみ。
 - **SEC1 — ゲスト追放時の権限後始末を fail-closed 化**: `InvitationService::revoke_membership` が
   「メンバーシップ削除 → best-effort の権限剥奪（失敗しても成功扱い）」だったのを
   「**権限一括剥奪（失敗時は操作全体を失敗・メンバーシップ維持）→ メンバーシップ削除**」へ反転。
