@@ -2,6 +2,16 @@
 
 完了した重要な変更の要約（詳しい経緯は `history/`、設計判断は `adr/`）。
 
+## 2026-07-12（セキュリティ改修: MT16 レビュー指摘の解消）
+
+- **SEC1 — ゲスト追放時の権限後始末を fail-closed 化**: `InvitationService::revoke_membership` が
+  「メンバーシップ削除 → best-effort の権限剥奪（失敗しても成功扱い）」だったのを
+  「**権限一括剥奪（失敗時は操作全体を失敗・メンバーシップ維持）→ メンバーシップ削除**」へ反転。
+  管理アクセス判定（`RequirePerms`）は権限行のみを見るため、旧順序では後始末失敗時に追放済み
+  ゲストが管理権限を保持し続けた。`UserPermissionRepository::revoke_all_for_user_in_tenant`
+  （単一トランザクションの SELECT FOR UPDATE + DELETE、剥奪コード返却）を新設し、キャッシュ
+  デコレータは返却コードを invalidate する。
+
 ## 2026-07-12（MT16: テナント分離・権限境界の統合テスト）
 
 - **統合テスト新設**（ADR-0009 §8 の negative test 必須方針。`crates/api/tests/tenant_isolation.rs`）:

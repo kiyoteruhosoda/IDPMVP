@@ -116,4 +116,36 @@ impl UserPermissionRepository for SqlxUserPermissionRepository {
             .map_err(repo_err)?;
         Ok(())
     }
+
+    async fn revoke_all_for_user_in_tenant(
+        &self,
+        tenant_id: TenantId,
+        user_id: Uuid,
+    ) -> Result<Vec<String>> {
+        // 剥奪対象コードの読み取りと削除を同一トランザクションで行い、返す一覧と削除行を一致させる。
+        let mut tx = self.pool.begin().await.map_err(repo_err)?;
+        let rows = sqlx::query(
+            "SELECT permission_code FROM user_permissions \
+             WHERE user_id = ? AND tenant_id = ? FOR UPDATE",
+        )
+        .bind(user_id.to_string())
+        .bind(tenant_id.to_string())
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(repo_err)?;
+        let codes: Vec<String> = rows
+            .iter()
+            .map(|row| row.try_get::<String, _>("permission_code").map_err(repo_err))
+            .collect::<Result<_>>()?;
+        if !codes.is_empty() {
+            sqlx::query("DELETE FROM user_permissions WHERE user_id = ? AND tenant_id = ?")
+                .bind(user_id.to_string())
+                .bind(tenant_id.to_string())
+                .execute(&mut *tx)
+                .await
+                .map_err(repo_err)?;
+        }
+        tx.commit().await.map_err(repo_err)?;
+        Ok(codes)
+    }
 }

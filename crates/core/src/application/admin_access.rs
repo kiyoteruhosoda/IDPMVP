@@ -295,6 +295,13 @@ mod tests {
         async fn revoke(&self, _t: TenantId, _u: Uuid, _c: &str) -> DomainResult<()> {
             unreachable!()
         }
+        async fn revoke_all_for_user_in_tenant(
+            &self,
+            _t: TenantId,
+            _u: Uuid,
+        ) -> DomainResult<Vec<String>> {
+            unreachable!()
+        }
     }
 
     fn test_user(id: Uuid, tenant_id: TenantId, status: UserStatus) -> User {

@@ -24,7 +24,6 @@ SEC = MT16 完了時のセキュリティレビュー指摘、REF = 同リファ
 
 | 優先 | # | 概要 | 状態 | 影響度 | 工数 | 推奨モデル |
 |---|---|---|---|---|---|---|
-| 1 | SEC1 | ゲスト追放時の権限後始末をトランザクション化 — `revoke_membership` はメンバーシップ削除**後**に scope 権限を best-effort 剥奪し、失敗しても成功を返す。`RequirePerms` は権限行のみを見るため、後始末が失敗すると**追放済みゲストが管理権限を保持し続ける**。権限削除を先行（一括 `revoke_all_for_user_in_tenant` 新設）し、失敗時は操作全体を失敗させる | ⬜未着手 | 大 | 小 | Opus 4.8 |
 | 2 | SEC2 | 本番での開発用シークレット使用を fail-fast に — `KEY_ENCRYPTION_KEY`・`INTERNAL_SERVICE_TOKEN` が未設定でも既知の開発値で起動する（warning のみ）。issuer が `https` の場合は起動失敗にする | ⬜未着手 | 大 | 小 | Sonnet 5 |
 | 3 | SEC3 | web（HTML 側）へセキュリティヘッダ付与 — ログイン画面・管理コンソールに `X-Frame-Options`/`CSP`/`nosniff` が無い（クリックジャッキング）。api の `add_security_headers` 相当を web の router へ追加 | ⬜未着手 | 中 | 小 | Haiku 4.5 |
 | 4 | SEC4 | `internal_tenant` の fail-open フォールバック撤去 — `/internal/*` で `tenant_id` 不正・未指定時に root テナントへフォールバックする過渡措置（MT13 で web のテナント経路化は完了済み）。400 に倒す | ⬜未着手 | 中 | 小 | Sonnet 5 |

@@ -238,6 +238,13 @@ pub trait UserPermissionRepository: Send + Sync {
     ) -> Result<()>;
     /// `tenant_id` を scope とする権限を剥奪する（不存在でもエラーにしない）。
     async fn revoke(&self, tenant_id: TenantId, user_id: Uuid, code: &str) -> Result<()>;
+    /// `tenant_id` を scope とする当該利用者の**全**権限行を一括で剥奪し、剥奪したコード一覧を返す
+    /// （不保有なら空。ゲスト追放時の後始末に使う。ADR-0009 §3）。読み取りと削除は原子的に行う。
+    async fn revoke_all_for_user_in_tenant(
+        &self,
+        tenant_id: TenantId,
+        user_id: Uuid,
+    ) -> Result<Vec<String>>;
 }
 
 /// Refresh Token の永続化（設計仕様 §9.1）。DB には SHA-256 hash を保存する。

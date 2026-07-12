@@ -395,6 +395,13 @@ mod tests {
                 .retain(|(t, u, c)| !(*t == tenant_id && *u == user_id && c == code));
             Ok(())
         }
+        async fn revoke_all_for_user_in_tenant(
+            &self,
+            _t: TenantId,
+            _u: Uuid,
+        ) -> DomainResult<Vec<String>> {
+            unreachable!()
+        }
     }
 
     fn test_user(id: Uuid) -> User {
