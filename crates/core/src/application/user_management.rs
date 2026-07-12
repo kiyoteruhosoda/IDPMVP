@@ -43,6 +43,14 @@ pub struct CreatedUser {
     pub generated_password: String,
 }
 
+/// 構築済み（未永続化）の利用者。検証・自動生成パスワードのハッシュ化まで済んでおり、永続化だけが
+/// 残っている状態。テナント開通（REF2）が、テナント行と同一トランザクションで管理者を永続化する
+/// ために使う。`generated_password` の扱いは [`CreatedUser`] と同じ（一度だけ平文、ログに出さない）。
+pub struct PreparedUser {
+    pub user: User,
+    pub generated_password: String,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum UserManagementError {
     #[error("validation error: {0}")]
@@ -81,15 +89,14 @@ impl UserManagementService {
         }
     }
 
-    /// 所属元が `tenant` の利用者を、自動生成パスワード付きで作成する。HOME メンバーシップを同時に
-    /// 生成し、`must_change_password = true` を付与する。生成パスワードを一度だけ返す。
-    pub async fn create_user(
+    /// 所属元が `tenant` の利用者を**構築だけ**する（永続化しない）。入力検証・一意性の事前チェック・
+    /// パスワード自動生成とハッシュ化まで行う。永続化とセットで使う（`create_user`、またはテナント
+    /// 開通トランザクション）。
+    pub async fn prepare_user(
         &self,
         tenant: TenantContext,
         cmd: CreateUserCommand,
-        actor: Uuid,
-        ctx: &RequestContext,
-    ) -> Result<CreatedUser, UserManagementError> {
+    ) -> Result<PreparedUser, UserManagementError> {
         let email = cmd.email.trim().to_string();
         validate_email(&email)?;
         let preferred_username = normalize_optional(cmd.preferred_username);
@@ -143,6 +150,25 @@ impl UserManagementService {
             updated_at: now,
         };
 
+        Ok(PreparedUser {
+            user,
+            generated_password,
+        })
+    }
+
+    /// 所属元が `tenant` の利用者を、自動生成パスワード付きで作成する。HOME メンバーシップを同時に
+    /// 生成し、`must_change_password = true` を付与する。生成パスワードを一度だけ返す。
+    pub async fn create_user(
+        &self,
+        tenant: TenantContext,
+        cmd: CreateUserCommand,
+        actor: Uuid,
+        ctx: &RequestContext,
+    ) -> Result<CreatedUser, UserManagementError> {
+        let tenant_id = tenant.tenant_id();
+        let prepared = self.prepare_user(tenant, cmd).await?;
+        let user = prepared.user;
+
         self.users.create(&user).await.map_err(|e| match e {
             DomainError::Conflict(m) => UserManagementError::Conflict(m),
             other => UserManagementError::Internal(other.to_string()),
@@ -150,7 +176,11 @@ impl UserManagementService {
 
         // HOME メンバーシップ（所属元の単一の出所は users.tenant_id。この行はフロー判定用の投影。§3）。
         self.memberships
-            .create(&TenantMembership::new_home(tenant_id, user.id, now))
+            .create(&TenantMembership::new_home(
+                tenant_id,
+                user.id,
+                user.created_at,
+            ))
             .await
             .map_err(internal)?;
 
@@ -170,7 +200,7 @@ impl UserManagementService {
         Ok(CreatedUser {
             user_id: user.id,
             sub: user.sub,
-            generated_password,
+            generated_password: prepared.generated_password,
         })
     }
 }

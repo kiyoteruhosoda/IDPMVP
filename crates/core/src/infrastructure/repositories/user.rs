@@ -62,36 +62,44 @@ fn map_row(row: &MySqlRow) -> Result<User> {
     })
 }
 
+/// users への INSERT（プール直接実行と provisioning トランザクションで共用する）。
+pub(crate) async fn insert_user<'e>(
+    executor: impl sqlx::Executor<'e, Database = sqlx::MySql>,
+    user: &User,
+) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO users \
+         (id, tenant_id, sub, email, email_verified, preferred_username, name, \
+          password_hash, must_change_password, status, failed_login_count, locked_until) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(user.id.to_string())
+    .bind(user.tenant_id.to_string())
+    .bind(user.sub.to_string())
+    .bind(&user.email)
+    .bind(user.email_verified)
+    .bind(&user.preferred_username)
+    .bind(&user.name)
+    .bind(&user.password_hash)
+    .bind(user.must_change_password)
+    .bind(user.status.as_str())
+    .bind(user.failed_login_count)
+    .bind(user.locked_until.map(|d| d.naive_utc()))
+    .execute(executor)
+    .await
+    .map_err(|e| match &e {
+        sqlx::Error::Database(db) if db.is_unique_violation() => {
+            DomainError::Conflict("email or preferred_username already exists".to_string())
+        }
+        _ => DomainError::Repository(e.to_string()),
+    })?;
+    Ok(())
+}
+
 #[async_trait]
 impl UserRepository for SqlxUserRepository {
     async fn create(&self, user: &User) -> Result<()> {
-        sqlx::query(
-            "INSERT INTO users \
-             (id, tenant_id, sub, email, email_verified, preferred_username, name, \
-              password_hash, must_change_password, status, failed_login_count, locked_until) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        )
-        .bind(user.id.to_string())
-        .bind(user.tenant_id.to_string())
-        .bind(user.sub.to_string())
-        .bind(&user.email)
-        .bind(user.email_verified)
-        .bind(&user.preferred_username)
-        .bind(&user.name)
-        .bind(&user.password_hash)
-        .bind(user.must_change_password)
-        .bind(user.status.as_str())
-        .bind(user.failed_login_count)
-        .bind(user.locked_until.map(|d| d.naive_utc()))
-        .execute(&self.pool)
-        .await
-        .map_err(|e| match &e {
-            sqlx::Error::Database(db) if db.is_unique_violation() => {
-                DomainError::Conflict("email or preferred_username already exists".to_string())
-            }
-            _ => DomainError::Repository(e.to_string()),
-        })?;
-        Ok(())
+        insert_user(&self.pool, user).await
     }
 
     async fn find_by_id(&self, id: Uuid) -> Result<Option<User>> {

@@ -50,23 +50,31 @@ fn map_row(row: &MySqlRow) -> Result<Tenant> {
     })
 }
 
+/// tenants への INSERT（プール直接実行と provisioning トランザクションで共用する）。
+pub(crate) async fn insert_tenant<'e>(
+    executor: impl sqlx::Executor<'e, Database = sqlx::MySql>,
+    tenant: &Tenant,
+) -> Result<()> {
+    sqlx::query("INSERT INTO tenants (id, parent_tenant_id, name, status) VALUES (?, ?, ?, ?)")
+        .bind(tenant.id.as_uuid().to_string())
+        .bind(tenant.parent_tenant_id.map(|p| p.as_uuid().to_string()))
+        .bind(&tenant.name)
+        .bind(tenant.status.as_str())
+        .execute(executor)
+        .await
+        .map_err(|e| match &e {
+            sqlx::Error::Database(db) if db.is_unique_violation() => {
+                DomainError::Conflict("a root tenant already exists".to_string())
+            }
+            _ => DomainError::Repository(e.to_string()),
+        })?;
+    Ok(())
+}
+
 #[async_trait]
 impl TenantRepository for SqlxTenantRepository {
     async fn create(&self, tenant: &Tenant) -> Result<()> {
-        sqlx::query("INSERT INTO tenants (id, parent_tenant_id, name, status) VALUES (?, ?, ?, ?)")
-            .bind(tenant.id.as_uuid().to_string())
-            .bind(tenant.parent_tenant_id.map(|p| p.as_uuid().to_string()))
-            .bind(&tenant.name)
-            .bind(tenant.status.as_str())
-            .execute(&self.pool)
-            .await
-            .map_err(|e| match &e {
-                sqlx::Error::Database(db) if db.is_unique_violation() => {
-                    DomainError::Conflict("a root tenant already exists".to_string())
-                }
-                _ => DomainError::Repository(e.to_string()),
-            })?;
-        Ok(())
+        insert_tenant(&self.pool, tenant).await
     }
 
     async fn find_by_id(&self, id: TenantId) -> Result<Option<Tenant>> {

@@ -14,6 +14,7 @@ pub mod sso_session;
 pub mod system_setting;
 pub mod tenant;
 pub mod tenant_membership;
+pub mod tenant_provisioning;
 pub mod totp_secret;
 pub mod user;
 pub mod user_permission;

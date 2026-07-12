@@ -58,6 +58,27 @@ pub trait TenantRepository: Send + Sync {
     async fn delete(&self, id: TenantId) -> Result<()>;
 }
 
+/// テナント開通（ADR-0009 §5）のトランザクション境界（unit of work）。
+///
+/// テナント作成は「テナント行・初期管理者ユーザー・HOME メンバーシップ・`idp.tenant.admin` 付与」の
+/// 4 行が揃って初めて意味を持つ（どれか欠けると管理者のいないテナント＝孤立テナントが残る）。
+/// 本ポートはこの集約を**単一トランザクションで**永続化し、途中失敗時は全体をロールバックする（REF2）。
+/// ドメインオブジェクトの構築・検証は Application 層の責務で、実装は永続化のみを担う。
+#[async_trait]
+pub trait TenantProvisioningRepository: Send + Sync {
+    /// テナント・初期管理者・HOME メンバーシップ・権限付与を原子的に永続化する。
+    /// 一意制約違反（email / preferred_username / root 重複）は `Conflict`、
+    /// `admin_permission_code` が `permissions` マスタに無い場合は `InvalidValue` を返す。
+    async fn provision(
+        &self,
+        tenant: &Tenant,
+        admin: &User,
+        admin_membership: &TenantMembership,
+        admin_permission_code: &str,
+        granted_at: DateTime<Utc>,
+    ) -> Result<()>;
+}
+
 /// テナントメンバーシップ（招待・ゲスト参加。ADR-0009 §3）の永続化。
 #[async_trait]
 pub trait TenantMembershipRepository: Send + Sync {

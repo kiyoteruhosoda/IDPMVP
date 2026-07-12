@@ -23,6 +23,35 @@ fn repo_err<E: std::fmt::Display>(e: E) -> DomainError {
     DomainError::Repository(e.to_string())
 }
 
+/// user_permissions への付与 INSERT（プール直接実行と provisioning トランザクションで共用する）。
+/// 冪等: 既存付与は granted_at を保持する（ON DUPLICATE KEY UPDATE user_id = user_id）。
+pub(crate) async fn insert_grant<'e>(
+    executor: impl sqlx::Executor<'e, Database = sqlx::MySql>,
+    tenant_id: TenantId,
+    user_id: Uuid,
+    code: &str,
+    granted_at: DateTime<Utc>,
+) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO user_permissions (user_id, permission_code, tenant_id, granted_at) \
+         VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE user_id = user_id",
+    )
+    .bind(user_id.to_string())
+    .bind(code)
+    .bind(tenant_id.to_string())
+    .bind(granted_at.naive_utc())
+    .execute(executor)
+    .await
+    .map_err(|e| match &e {
+        // permission_code が permissions マスタに無い（FK 違反）等は不正リクエスト扱い。
+        sqlx::Error::Database(db) if db.is_foreign_key_violation() => {
+            DomainError::InvalidValue(format!("unknown permission code or user: {code}"))
+        }
+        _ => DomainError::Repository(e.to_string()),
+    })?;
+    Ok(())
+}
+
 #[async_trait]
 impl UserPermissionRepository for SqlxUserPermissionRepository {
     async fn list_available_codes(&self) -> Result<Vec<String>> {
@@ -82,25 +111,7 @@ impl UserPermissionRepository for SqlxUserPermissionRepository {
         code: &str,
         granted_at: DateTime<Utc>,
     ) -> Result<()> {
-        // 冪等: 既存付与は granted_at を保持する（ON DUPLICATE KEY UPDATE user_id = user_id）。
-        sqlx::query(
-            "INSERT INTO user_permissions (user_id, permission_code, tenant_id, granted_at) \
-             VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE user_id = user_id",
-        )
-        .bind(user_id.to_string())
-        .bind(code)
-        .bind(tenant_id.to_string())
-        .bind(granted_at.naive_utc())
-        .execute(&self.pool)
-        .await
-        .map_err(|e| match &e {
-            // permission_code が permissions マスタに無い（FK 違反）等は不正リクエスト扱い。
-            sqlx::Error::Database(db) if db.is_foreign_key_violation() => {
-                DomainError::InvalidValue(format!("unknown permission code or user: {code}"))
-            }
-            _ => DomainError::Repository(e.to_string()),
-        })?;
-        Ok(())
+        insert_grant(&self.pool, tenant_id, user_id, code, granted_at).await
     }
 
     async fn revoke(&self, tenant_id: TenantId, user_id: Uuid, code: &str) -> Result<()> {

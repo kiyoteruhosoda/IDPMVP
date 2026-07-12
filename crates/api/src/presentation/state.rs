@@ -64,6 +64,7 @@ use crate::infrastructure::repositories::sso_session::SqlxSsoSessionRepository;
 use crate::infrastructure::repositories::system_setting::SqlxSystemSettingsRepository;
 use crate::infrastructure::repositories::tenant::SqlxTenantRepository;
 use crate::infrastructure::repositories::tenant_membership::SqlxTenantMembershipRepository;
+use crate::infrastructure::repositories::tenant_provisioning::SqlxTenantProvisioningRepository;
 use crate::infrastructure::repositories::totp_secret::SqlxTotpSecretRepository;
 use crate::infrastructure::repositories::user::SqlxUserRepository;
 use crate::infrastructure::repositories::user_permission::SqlxUserPermissionRepository;
@@ -300,12 +301,13 @@ impl AppState {
             clock.clone(),
             ids.clone(),
         ));
-        // テナント作成・管理（ADR-0009 §5・§6）。初期管理者の生成は users_admin へ委譲し、新テナント
-        // scope の idp.tenant.admin 付与は同一キャッシュ付きリポジトリを共有するため判定へ即時反映される。
+        // テナント作成・管理（ADR-0009 §5・§6）。初期管理者の構築は users_admin へ委譲し、テナント・
+        // 管理者・メンバーシップ・権限付与は単一トランザクションで永続化する（unit of work。REF2）。
+        // 付与は判定キャッシュを経由しないが、新規生成 ID のため該当キーがキャッシュに載っていることはない。
         let tenants_admin = Arc::new(TenantManagementService::new(
             tenants.clone(),
             users_admin.clone(),
-            user_permissions.clone(),
+            Arc::new(SqlxTenantProvisioningRepository::new(pool.clone())),
             audit.clone(),
             clock.clone(),
             ids.clone(),
