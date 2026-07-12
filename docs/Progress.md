@@ -18,11 +18,4 @@ Phase 計画に沿う。
 
 ## バックログ
 
-バックログは空です。SEC/REF3・SEC7・REF4 はすべて完了（`docs/CHANGELOG.md` 参照）。
-
-> MT14・MT15・MT19・MT20・REF3・SEC7・REF4 は完了（`docs/CHANGELOG.md` 参照）。
-
-### 依存関係メモ
-
-**依存関係**: Phase 2（MT6〜MT8）・MT9〜MT20・SEC6・SEC6b（Phase 3）・REF3・SEC7・REF4 は完了。
-メール配送基盤（`Mailer`・`SystemSettingsService::smtp_server`）は MT17/MT18/SEC6b で確立済み。
+バックログは空です。
