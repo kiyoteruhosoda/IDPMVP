@@ -34,3 +34,6 @@ askama = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
 qrcode = { workspace = true }
+
+[dev-dependencies]
+tower = { workspace = true, features = ["util"] }

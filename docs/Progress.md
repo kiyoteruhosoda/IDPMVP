@@ -24,7 +24,6 @@ SEC = MT16 完了時のセキュリティレビュー指摘、REF = 同リファ
 
 | 優先 | # | 概要 | 状態 | 影響度 | 工数 | 推奨モデル |
 |---|---|---|---|---|---|---|
-| 3 | SEC3 | web（HTML 側）へセキュリティヘッダ付与 — ログイン画面・管理コンソールに `X-Frame-Options`/`CSP`/`nosniff` が無い（クリックジャッキング）。api の `add_security_headers` 相当を web の router へ追加 | ⬜未着手 | 中 | 小 | Haiku 4.5 |
 | 4 | SEC4 | `internal_tenant` の fail-open フォールバック撤去 — `/internal/*` で `tenant_id` 不正・未指定時に root テナントへフォールバックする過渡措置（MT13 で web のテナント経路化は完了済み）。400 に倒す | ⬜未着手 | 中 | 小 | Sonnet 5 |
 | 5 | SEC5 | `ensure_active_key` の排他制御 — 複数インスタンス同時起動（ローリングデプロイ）で ACTIVE 署名鍵が複数本できる TOCTOU（MT16 のテスト並走で実際に再現）。`tenants.is_root` と同じ番兵列 + UNIQUE（要マイグレーション）または `GET_LOCK` で直列化 | ⬜未着手 | 中 | 中 | Sonnet 5 |
 | 6 | REF1 | 統合テスト支援モジュールの共通化 — `setup`/`create_sso_session`/`send`/`body_json`/リクエストビルダが 7 ファイルにコピーされ、マイグレーション・鍵ブートストラップの OnceCell ガードも 3 ファイルに重複。`crates/api/tests/support/` へ抽出（以後のテスト追加すべてに効くため機能追加より先） | ⬜未着手 | 中 | 中 | Sonnet 5 |

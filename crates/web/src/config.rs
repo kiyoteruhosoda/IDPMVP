@@ -27,6 +27,8 @@ pub struct Config {
     internal_service_token_is_dev: bool,
     cookie_secure: bool,
     auth_session_ttl_secs: u64,
+    /// HSTS `max-age`（秒）。0 = HSTS ヘッダを付与しない（api 側と同キー `HSTS_MAX_AGE`）。
+    hsts_max_age: u64,
     log_format: LogFormat,
 }
 
@@ -50,6 +52,7 @@ impl Config {
             internal_service_token_is_dev,
             cookie_secure,
             auth_session_ttl_secs: env_parse("AUTH_SESSION_TTL_SECS", DEFAULT_AUTH_SESSION_TTL_SECS)?,
+            hsts_max_age: env_parse("HSTS_MAX_AGE", 0u64)?,
             log_format: match env_or("LOG_FORMAT", "json").to_ascii_lowercase().as_str() {
                 "pretty" => LogFormat::Pretty,
                 _ => LogFormat::Json,
@@ -78,6 +81,10 @@ impl Config {
     /// `auth_session_id` Cookie の TTL（秒）。api 側の `AUTH_SESSION_TTL_SECS` と合わせる。
     pub fn auth_session_ttl_secs(&self) -> u64 {
         self.auth_session_ttl_secs
+    }
+    /// HSTS `max-age`（秒）。0 = HSTS ヘッダを付与しない。
+    pub fn hsts_max_age(&self) -> u64 {
+        self.hsts_max_age
     }
     pub fn log_format(&self) -> LogFormat {
         self.log_format

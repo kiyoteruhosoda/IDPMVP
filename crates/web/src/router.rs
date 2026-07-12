@@ -9,6 +9,7 @@ use crate::handlers::{
     admin_settings, admin_signing_keys_console, admin_status_console, admin_users_console, consent,
     health, login, mfa_totp, passkey, password_change, user_settings,
 };
+use crate::security_headers::add_security_headers;
 use crate::state::WebState;
 use crate::tenant::capture_tenant;
 use axum::routing::{get, post};
@@ -16,6 +17,7 @@ use axum::Router;
 use tower_http::trace::TraceLayer;
 
 pub fn build(state: WebState) -> Router {
+    let hsts_max_age = state.config.hsts_max_age();
     let tenant_scoped = Router::new()
         .route("/login", get(login::login_page).post(login::login))
         // 強制パスワード変更（ADR-0009 §5、MT12）。パスワード認証成功後・SSO 発行前の pending 状態で使う。
@@ -151,5 +153,8 @@ pub fn build(state: WebState) -> Router {
         .nest("/{tenant_id}", tenant_scoped)
         .layer(axum::middleware::from_fn(correlation::propagate))
         .layer(TraceLayer::new_for_http())
+        .layer(axum::middleware::from_fn(move |req, next| {
+            add_security_headers(req, next, hsts_max_age)
+        }))
         .with_state(state)
 }

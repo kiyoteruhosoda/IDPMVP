@@ -4,6 +4,11 @@
 
 ## 2026-07-12（セキュリティ改修: MT16 レビュー指摘の解消）
 
+- **SEC3 — web（HTML 側）へセキュリティヘッダ付与**: ログイン画面・管理コンソールの全レスポンスに
+  `X-Frame-Options: DENY`・`Content-Security-Policy`（`frame-ancestors 'none'`・自オリジン限定。
+  現行テンプレートのインライン script/style は許容、nonce 化は後続改善）・`nosniff`・
+  `Referrer-Policy` を付与（`crates/web/src/security_headers.rs`）。`HSTS_MAX_AGE` も api と同キーで
+  web に追加。
 - **SEC2 — 本番での開発用シークレット使用を fail-fast 化**: `ISSUER` が `https://` のとき、
   `KEY_ENCRYPTION_KEY`／`INTERNAL_SERVICE_TOKEN` が未設定（＝ソース埋め込みの開発用既知値）なら
   api・web とも起動を構成エラーで失敗させる。http（ローカル開発）は従来どおり warning のみ。
