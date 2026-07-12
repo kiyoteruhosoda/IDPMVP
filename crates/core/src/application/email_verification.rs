@@ -278,6 +278,9 @@ mod tests {
             }
             Ok(())
         }
+        async fn update_language(&self, _id: Uuid, _language: Option<&str>) -> DomainResult<()> {
+            unreachable!()
+        }
     }
 
     #[derive(Default)]

@@ -352,6 +352,9 @@ mod tests {
         async fn mark_email_verified(&self, _id: Uuid) -> DomainResult<()> {
             unreachable!()
         }
+        async fn update_language(&self, _id: Uuid, _language: Option<&str>) -> DomainResult<()> {
+            unreachable!()
+        }
     }
 
     /// 指定した (tenant, user) の組を ACTIVE メンバーとして扱うフェイク（他は非メンバー）。

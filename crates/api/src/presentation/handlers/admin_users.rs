@@ -51,7 +51,6 @@ pub async fn create_user(
     headers: HeaderMap,
     Json(body): Json<CreateUserRequest>,
 ) -> Result<(StatusCode, Json<UserCreatedResponse>), ApiError> {
-    let msgs = ApiMessages::new(locale);
     let ctx = request_context(&headers, &correlation, state.config.trust_forwarded_headers());
     let created = state
         .users_admin
@@ -66,7 +65,7 @@ pub async fn create_user(
             &ctx,
         )
         .await
-        .map_err(|e| map_user_management_error(e, &msgs))?;
+        .map_err(|e| map_user_management_error(e, locale))?;
     Ok((
         StatusCode::CREATED,
         Json(UserCreatedResponse {
@@ -85,19 +84,18 @@ pub async fn search_user(
     locale: ApiLocale,
     Query(query): Query<UserSearchQuery>,
 ) -> Result<Json<UserSummaryResponse>, ApiError> {
-    let msgs = ApiMessages::new(locale);
     let term = query.q.unwrap_or_default();
     if term.trim().is_empty() {
-        return Err(ApiError::NotFound(msgs.get("api-user-not-found")));
+        return Err(ApiError::NotFound(ApiMessages::new(locale).get("api-user-not-found")));
     }
     match state
         .permissions_admin
         .find_user_by_identifier(tenant.context(), &term)
         .await
-        .map_err(|e| map_error(e, &msgs))?
+        .map_err(|e| map_error(e, locale))?
     {
         Some(user) => Ok(Json(summary(&user))),
-        None => Err(ApiError::NotFound(msgs.get("api-user-not-found"))),
+        None => Err(ApiError::NotFound(ApiMessages::new(locale).get("api-user-not-found"))),
     }
 }
 
@@ -109,14 +107,13 @@ pub async fn get_user(
     locale: ApiLocale,
     Path((_tenant_id, user_id)): Path<(String, String)>,
 ) -> Result<Json<UserSummaryResponse>, ApiError> {
-    let msgs = ApiMessages::new(locale);
     let target = Uuid::parse_str(&user_id)
-        .map_err(|_| ApiError::NotFound(msgs.get("api-user-not-found")))?;
+        .map_err(|_| ApiError::NotFound(ApiMessages::new(locale).get("api-user-not-found")))?;
     let user = state
         .permissions_admin
         .get_user(tenant.context(), target)
         .await
-        .map_err(|e| map_error(e, &msgs))?;
+        .map_err(|e| map_error(e, locale))?;
     Ok(Json(summary(&user)))
 }
 
@@ -132,7 +129,8 @@ fn summary(u: &User) -> UserSummaryResponse {
     }
 }
 
-fn map_error(e: PermissionManagementError, msgs: &ApiMessages) -> ApiError {
+fn map_error(e: PermissionManagementError, locale: ApiLocale) -> ApiError {
+    let msgs = ApiMessages::new(locale);
     match e {
         PermissionManagementError::Validation(m) => ApiError::BadRequest(m),
         PermissionManagementError::NotFound => ApiError::NotFound(msgs.get("api-user-not-found")),
@@ -141,7 +139,7 @@ fn map_error(e: PermissionManagementError, msgs: &ApiMessages) -> ApiError {
     }
 }
 
-fn map_user_management_error(e: UserManagementError, _msgs: &ApiMessages) -> ApiError {
+fn map_user_management_error(e: UserManagementError, _locale: ApiLocale) -> ApiError {
     match e {
         UserManagementError::Validation(m) => ApiError::BadRequest(m),
         UserManagementError::Conflict(m) => ApiError::Conflict(m),

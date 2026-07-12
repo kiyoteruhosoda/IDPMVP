@@ -31,8 +31,7 @@ pub async fn list_keys(
     State(state): State<AppState>,
     locale: ApiLocale,
 ) -> Result<Json<Vec<SigningKeyResponse>>, ApiError> {
-    let msgs = ApiMessages::new(locale);
-    let keys = state.keys.list_keys().await.map_err(|e| map_error(e, &msgs))?;
+    let keys = state.keys.list_keys().await.map_err(|e| map_error(e, locale))?;
     Ok(Json(keys.iter().map(key_response).collect()))
 }
 
@@ -55,11 +54,10 @@ pub async fn generate_key(
     locale: ApiLocale,
     Json(body): Json<GenerateSigningKeyRequest>,
 ) -> Result<(StatusCode, Json<SigningKeyResponse>), ApiError> {
-    let msgs = ApiMessages::new(locale);
     let algorithm = SigningAlgorithm::parse(&body.algorithm)
-        .map_err(|_| ApiError::BadRequest(msgs.get("api-invalid-request")))?;
+        .map_err(|_| ApiError::BadRequest(ApiMessages::new(locale).get("api-invalid-request")))?;
 
-    let key = state.keys.generate_key(algorithm).await.map_err(|e| map_error(e, &msgs))?;
+    let key = state.keys.generate_key(algorithm).await.map_err(|e| map_error(e, locale))?;
     Ok((StatusCode::CREATED, Json(key_response(&key))))
 }
 
@@ -85,8 +83,7 @@ pub async fn retire_key(
     // 全テナント一律 `/{tenant_id}/admin/...` に配置し RequirePerms でテナント権限を検証する。
     Path((_tenant_id, kid)): Path<(String, String)>,
 ) -> Result<StatusCode, ApiError> {
-    let msgs = ApiMessages::new(locale);
-    state.keys.retire_key(&kid).await.map_err(|e| map_error(e, &msgs))?;
+    state.keys.retire_key(&kid).await.map_err(|e| map_error(e, locale))?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -110,8 +107,7 @@ pub async fn delete_key(
     locale: ApiLocale,
     Path((_tenant_id, kid)): Path<(String, String)>,
 ) -> Result<StatusCode, ApiError> {
-    let msgs = ApiMessages::new(locale);
-    state.keys.delete_key(&kid).await.map_err(|e| map_error(e, &msgs))?;
+    state.keys.delete_key(&kid).await.map_err(|e| map_error(e, locale))?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -126,10 +122,11 @@ fn key_response(k: &SigningKey) -> SigningKeyResponse {
     }
 }
 
-fn map_error(e: KeyManagementError, msgs: &ApiMessages) -> ApiError {
+fn map_error(e: KeyManagementError, locale: ApiLocale) -> ApiError {
+    let msgs = ApiMessages::new(locale);
     match e {
         KeyManagementError::NotFound(_) => ApiError::NotFound(msgs.get("api-signing-key-not-found")),
-        KeyManagementError::Validation(_) => ApiError::BadRequest(msgs.get("api-invalid-request")),
+        KeyManagementError::Validation(_) => ApiError::BadRequest(ApiMessages::new(locale).get("api-invalid-request")),
         KeyManagementError::Internal(m) => ApiError::Internal(m),
     }
 }

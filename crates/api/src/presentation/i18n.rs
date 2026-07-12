@@ -7,8 +7,6 @@
 //! `FluentBundle` は `!Send` のためリクエスト境界を跨いだ保持が不可。
 //! `ApiMessages::new(locale)` でリクエストごとに生成する。
 
-use axum::extract::FromRequestParts;
-use axum::http::request::Parts;
 use fluent::{FluentBundle, FluentResource};
 use unic_langid::{langid, LanguageIdentifier};
 
@@ -70,14 +68,16 @@ impl ApiLocale {
 
 /// axum extractor: `Accept-Language` → `ApiLocale`。
 /// ヘッダが無い・非対応の場合は既定 `Ja` を返す。
-#[axum::async_trait]
-impl<S> FromRequestParts<S> for ApiLocale
+impl<S> axum::extract::FromRequestParts<S> for ApiLocale
 where
     S: Send + Sync,
 {
     type Rejection = std::convert::Infallible;
 
-    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(
+        parts: &mut axum::http::request::Parts,
+        _state: &S,
+    ) -> Result<Self, Self::Rejection> {
         let header = parts
             .headers
             .get(axum::http::header::ACCEPT_LANGUAGE)

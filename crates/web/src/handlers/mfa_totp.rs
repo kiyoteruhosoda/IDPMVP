@@ -264,10 +264,7 @@ pub async fn verify(
             );
             let expire_auth = cookies::expire(cookies::AUTH_SESSION_COOKIE, secure);
             // ユーザーの DB 言語設定があれば lang Cookie に同期する（MT20: DB > Cookie の優先順）。
-            let mut response_headers: Vec<(header::HeaderName, String)> = vec![
-                (header::SET_COOKIE, sso_cookie),
-                (header::SET_COOKIE, expire_auth),
-            ];
+            let redirect = found(&redirect_to);
             if let Some(lang) = user_language.as_deref().and_then(crate::i18n::Locale::from_tag) {
                 let lang_cookie = cookies::build(
                     cookies::LANG_COOKIE,
@@ -275,9 +272,25 @@ pub async fn verify(
                     cookies::LANG_COOKIE_MAX_AGE_SECS,
                     secure,
                 );
-                response_headers.push((header::SET_COOKIE, lang_cookie));
+                (
+                    AppendHeaders([
+                        (header::SET_COOKIE, sso_cookie),
+                        (header::SET_COOKIE, expire_auth),
+                        (header::SET_COOKIE, lang_cookie),
+                    ]),
+                    redirect,
+                )
+                    .into_response()
+            } else {
+                (
+                    AppendHeaders([
+                        (header::SET_COOKIE, sso_cookie),
+                        (header::SET_COOKIE, expire_auth),
+                    ]),
+                    redirect,
+                )
+                    .into_response()
             }
-            (response_headers, found(&redirect_to)).into_response()
         }
         InternalVerifyTotpResponse::ConsentRequired {
             auth_session_id: new_auth_session_id,

@@ -147,6 +147,14 @@ impl UserManagementService {
             language: None,
             password_hash,
             must_change_password: true,
+            status: UserStatus::Active,
+            failed_login_count: 0,
+            locked_until: None,
+            created_at: now,
+            updated_at: now,
+        };
+
+        Ok(PreparedUser {
             user,
             generated_password,
         })
@@ -321,6 +329,9 @@ mod tests {
             unreachable!()
         }
         async fn mark_email_verified(&self, _id: Uuid) -> DomainResult<()> {
+            unreachable!()
+        }
+        async fn update_language(&self, _id: Uuid, _language: Option<&str>) -> DomainResult<()> {
             unreachable!()
         }
     }

@@ -36,15 +36,18 @@ pub async fn page(
         .get(header::ACCEPT_LANGUAGE)
         .and_then(|v| v.to_str().ok());
     let locale = Locale::resolve(query.lang.as_deref(), None, cookie_lang.as_deref(), accept);
-    let messages = Messages::new(locale);
 
-    let body = render(&UserSettings {
-        messages: &messages,
-        tenant: &tenant.prefix(),
-        current_lang: locale.as_tag(),
-        saved_key: query.saved.as_deref().and_then(saved_key_for),
-        error_key: query.error.as_deref().and_then(error_key_for),
-    });
+    // Messages は FluentBundle を含み !Send のため、await をまたがないよう先にレンダリングして解放する。
+    let body = {
+        let messages = Messages::new(locale);
+        render(&UserSettings {
+            messages: &messages,
+            tenant: &tenant.prefix(),
+            current_lang: locale.as_tag(),
+            saved_key: query.saved.as_deref().and_then(saved_key_for),
+            error_key: query.error.as_deref().and_then(error_key_for),
+        })
+    };
 
     // 明示的な言語選択（有効な `?lang=`）のときのみ Cookie を保存し、ログイン中なら DB へも永続化する。
     let set_lang = query
@@ -58,7 +61,7 @@ pub async fn page(
             if let Some(sso) = cookies::get(&headers, cookies::SSO_SESSION_COOKIE) {
                 let req = InternalAccountUpdateLanguageRequest {
                     sso_session_id: sso,
-                    language: Some(tag.to_string()),
+                    language: tag.to_string(),
                 };
                 match state.api.account_update_language(&req).await {
                     Ok(InternalAccountUpdateLanguageResponse::Ok) => {}

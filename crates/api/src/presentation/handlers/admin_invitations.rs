@@ -43,15 +43,14 @@ pub async fn create_invitation(
     headers: HeaderMap,
     Json(body): Json<CreateInvitationRequest>,
 ) -> Result<(StatusCode, Json<InvitationCreatedResponse>), ApiError> {
-    let msgs = ApiMessages::new(locale);
     let target = Uuid::parse_str(&body.user_id)
-        .map_err(|_| ApiError::BadRequest(msgs.get("api-invalid-request")))?;
+        .map_err(|_| ApiError::BadRequest(ApiMessages::new(locale).get("api-invalid-request")))?;
     let ctx = request_context(&headers, &correlation, state.config.trust_forwarded_headers());
     let created = state
         .invitations
         .create_invitation(tenant.context(), target, admin.user_id, &ctx)
         .await
-        .map_err(|e| map_error(e, &msgs))?;
+        .map_err(|e| map_error(e, locale))?;
     Ok((
         StatusCode::CREATED,
         Json(InvitationCreatedResponse {
@@ -63,7 +62,8 @@ pub async fn create_invitation(
     ))
 }
 
-fn map_error(e: InvitationError, msgs: &ApiMessages) -> ApiError {
+fn map_error(e: InvitationError, locale: ApiLocale) -> ApiError {
+    let msgs = ApiMessages::new(locale);
     match e {
         InvitationError::NotFound => ApiError::NotFound(msgs.get("api-invitation-user-not-found")),
         InvitationError::AlreadyMember => ApiError::Conflict("already a member".to_string()),

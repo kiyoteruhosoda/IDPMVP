@@ -35,12 +35,11 @@ pub async fn list_members(
     Extension(tenant): Extension<ResolvedTenant>,
     locale: ApiLocale,
 ) -> Result<Json<Vec<MemberResponse>>, ApiError> {
-    let msgs = ApiMessages::new(locale);
     let members = state
         .invitations
         .list_members(tenant.context())
         .await
-        .map_err(|e| map_error(e, &msgs))?;
+        .map_err(|e| map_error(e, locale))?;
     Ok(Json(
         members
             .into_iter()
@@ -79,19 +78,19 @@ pub async fn revoke_member(
     headers: HeaderMap,
     Path((_tenant_id, user_id)): Path<(String, String)>,
 ) -> Result<StatusCode, ApiError> {
-    let msgs = ApiMessages::new(locale);
     let target = Uuid::parse_str(&user_id)
-        .map_err(|_| ApiError::BadRequest(msgs.get("api-invalid-request")))?;
+        .map_err(|_| ApiError::BadRequest(ApiMessages::new(locale).get("api-invalid-request")))?;
     let ctx = request_context(&headers, &correlation, state.config.trust_forwarded_headers());
     state
         .invitations
         .revoke_membership(tenant.context(), target, admin.user_id, &ctx)
         .await
-        .map_err(|e| map_error(e, &msgs))?;
+        .map_err(|e| map_error(e, locale))?;
     Ok(StatusCode::NO_CONTENT)
 }
 
-fn map_error(e: InvitationError, msgs: &ApiMessages) -> ApiError {
+fn map_error(e: InvitationError, locale: ApiLocale) -> ApiError {
+    let msgs = ApiMessages::new(locale);
     match e {
         InvitationError::NotFound => ApiError::NotFound(msgs.get("api-member-not-found")),
         InvitationError::AlreadyMember => {

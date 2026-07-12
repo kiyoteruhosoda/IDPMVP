@@ -456,6 +456,7 @@ mod tests {
             redirect_to: "https://rp.example.com/cb?code=abc&state=s".to_string(),
             sso_session_id: "sso-123".to_string(),
             sso_absolute_ttl_secs: 86_400,
+            user_language: None,
         };
         let json = serde_json::to_value(&success).unwrap();
         assert_eq!(json["result"], "success");
