@@ -98,6 +98,22 @@ impl UserPermissionRepository for CachedUserPermissionRepository {
         self.cache.invalidate(&Self::key(tenant_id, user_id, code));
         Ok(())
     }
+
+    async fn revoke_all_for_user_in_tenant(
+        &self,
+        tenant_id: TenantId,
+        user_id: Uuid,
+    ) -> Result<Vec<String>> {
+        let revoked = self
+            .inner
+            .revoke_all_for_user_in_tenant(tenant_id, user_id)
+            .await?;
+        // 一括剥奪を判定へ即時反映する（stale allow を避ける）。
+        for code in &revoked {
+            self.cache.invalidate(&Self::key(tenant_id, user_id, code));
+        }
+        Ok(revoked)
+    }
 }
 
 #[cfg(test)]
@@ -167,6 +183,20 @@ mod tests {
                 .retain(|(t, u, c)| !(*t == tenant_id && *u == user_id && c == code));
             Ok(())
         }
+        async fn revoke_all_for_user_in_tenant(
+            &self,
+            tenant_id: TenantId,
+            user_id: Uuid,
+        ) -> Result<Vec<String>> {
+            let mut granted = self.granted.lock().unwrap();
+            let revoked: Vec<String> = granted
+                .iter()
+                .filter(|(t, u, _)| *t == tenant_id && *u == user_id)
+                .map(|(_, _, c)| c.clone())
+                .collect();
+            granted.retain(|(t, u, _)| !(*t == tenant_id && *u == user_id));
+            Ok(revoked)
+        }
     }
 
     fn now() -> DateTime<Utc> {
@@ -230,6 +260,30 @@ mod tests {
         assert!(repo.has_permission(tenant, user, "idp.tenant.admin").await.unwrap());
         repo.revoke(tenant, user, "idp.tenant.admin").await.unwrap();
         assert!(!repo.has_permission(tenant, user, "idp.tenant.admin").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn revoke_all_invalidates_every_revoked_code() {
+        let tenant: TenantId = Uuid::now_v7().into();
+        let user = Uuid::new_v4();
+        let inner = Arc::new(CountingPermissions::default());
+        {
+            let mut granted = inner.granted.lock().unwrap();
+            granted.push((tenant, user, "idp.tenant.admin".to_string()));
+            granted.push((tenant, user, "idp.other".to_string()));
+        }
+        let repo = setup(inner.clone());
+
+        // 両コードの許可をキャッシュに載せる。
+        assert!(repo.has_permission(tenant, user, "idp.tenant.admin").await.unwrap());
+        assert!(repo.has_permission(tenant, user, "idp.other").await.unwrap());
+
+        // 一括剥奪 → 剥奪コード一覧が返り、両コードとも stale allow が残らない。
+        let mut revoked = repo.revoke_all_for_user_in_tenant(tenant, user).await.unwrap();
+        revoked.sort();
+        assert_eq!(revoked, vec!["idp.other".to_string(), "idp.tenant.admin".to_string()]);
+        assert!(!repo.has_permission(tenant, user, "idp.tenant.admin").await.unwrap());
+        assert!(!repo.has_permission(tenant, user, "idp.other").await.unwrap());
     }
 
     #[tokio::test]

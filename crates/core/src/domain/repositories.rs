@@ -178,6 +178,11 @@ pub trait AuthorizationCodeRepository: Send + Sync {
 #[async_trait]
 pub trait SigningKeyRepository: Send + Sync {
     async fn insert(&self, key: &SigningKey) -> Result<()>;
+    /// **ACTIVE 鍵が 1 本も無い場合に限り** `key` を挿入する（ブートストラップ専用の排他挿入）。
+    /// 挿入したら `true`、既に ACTIVE 鍵が存在して何もしなかったら `false` を返す。
+    /// 「存在確認 → 挿入」を排他区間で行い、複数インスタンスの同時起動でも ACTIVE 鍵が
+    /// 重複生成されないことを実装が保証する（SEC5）。
+    async fn insert_if_no_active(&self, key: &SigningKey) -> Result<bool>;
     /// 新規署名に使う ACTIVE 鍵を返す。
     async fn find_active(&self) -> Result<Option<SigningKey>>;
     /// JWKS 公開対象（ACTIVE + RETIRED で not_after が未来のもの）を返す。
@@ -238,6 +243,13 @@ pub trait UserPermissionRepository: Send + Sync {
     ) -> Result<()>;
     /// `tenant_id` を scope とする権限を剥奪する（不存在でもエラーにしない）。
     async fn revoke(&self, tenant_id: TenantId, user_id: Uuid, code: &str) -> Result<()>;
+    /// `tenant_id` を scope とする当該利用者の**全**権限行を一括で剥奪し、剥奪したコード一覧を返す
+    /// （不保有なら空。ゲスト追放時の後始末に使う。ADR-0009 §3）。読み取りと削除は原子的に行う。
+    async fn revoke_all_for_user_in_tenant(
+        &self,
+        tenant_id: TenantId,
+        user_id: Uuid,
+    ) -> Result<Vec<String>>;
 }
 
 /// Refresh Token の永続化（設計仕様 §9.1）。DB には SHA-256 hash を保存する。

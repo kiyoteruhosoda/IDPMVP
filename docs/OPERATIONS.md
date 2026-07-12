@@ -168,7 +168,8 @@ DELETE up FROM user_permissions up
 | `DATABASE_URL` | `mysql://idp:idp@127.0.0.1:3306/idp` | MariaDB DSN |
 | `DB_MAX_CONNECTIONS` | `10` | 接続プール上限 |
 | `LOG_FORMAT` | `json` | `json` / `pretty` |
-| `KEY_ENCRYPTION_KEY` | 開発用固定値 | 署名秘密鍵の暗号化キー（base64、32 バイト）。**本番では必須** |
+| `KEY_ENCRYPTION_KEY` | 開発用固定値 | 署名秘密鍵の暗号化キー（base64、32 バイト）。**`ISSUER` が https のとき未設定なら起動失敗** |
+| `INTERNAL_SERVICE_TOKEN` | 開発用固定値 | web→api の `/internal/*` 共有シークレット（api・web で同値）。**`ISSUER` が https のとき未設定なら起動失敗** |
 | `COOKIE_SECURE` | issuer が https なら `true` | Cookie の `Secure` 属性 |
 | `AUTH_SESSION_TTL_SECS` | `600` | AuthSession の有効期間 |
 | `AUTHORIZATION_CODE_TTL_SECS` | `60` | authorization code の有効期間 |

@@ -2,6 +2,61 @@
 
 完了した重要な変更の要約（詳しい経緯は `history/`、設計判断は `adr/`）。
 
+## 2026-07-12（セキュリティ改修: MT16 レビュー指摘の解消）
+
+- **SEC3 — web（HTML 側）へセキュリティヘッダ付与**: ログイン画面・管理コンソールの全レスポンスに
+  `X-Frame-Options: DENY`・`Content-Security-Policy`（`frame-ancestors 'none'`・自オリジン限定。
+  現行テンプレートのインライン script/style は許容、nonce 化は後続改善）・`nosniff`・
+  `Referrer-Policy` を付与（`crates/web/src/security_headers.rs`）。`HSTS_MAX_AGE` も api と同キーで
+  web に追加。
+- **REF1 — 統合テスト支援モジュールの共通化**: 9 テストファイルに重複していた
+  `setup`（DB 接続・マイグレーション・AppState/ルータ組み立て・署名鍵ブートストラップ）・SSO
+  セッション/利用者/クライアント生成・リクエストビルダ・レスポンス読み取りを
+  `crates/api/tests/support/mod.rs` へ抽出（テストコード約 1,100 行削減）。マイグレーションと
+  鍵ブートストラップの「プロセス内一度だけ」ガード（OnceCell）も一元化。
+- **SEC5 — 署名鍵ブートストラップの排他制御**: `ensure_active_key` の「存在確認 → 生成」TOCTOU を、
+  `SigningKeyRepository::insert_if_no_active`（MariaDB `GET_LOCK` の排他区間で再確認＋挿入。同一接続で
+  取得〜解放）で解消。複数インスタンスの同時起動でも ACTIVE 鍵は 1 本のまま。8 並走のブートストラップ
+  レースを keys 統合テストで検証（DB 側で ACTIVE 複数を禁止しない理由: 手動 generate・ローテーション
+  遷移では ACTIVE 並存が正当なため、排他はブートストラップ経路に限定する）。
+- **SEC4 — `/internal/*` のテナント解決を fail-closed 化**: `tenant_id` 未指定・不正時に root へ
+  フォールバックする過渡措置（`internal_tenant`）を撤去し、`require_internal_tenant` が 400 を返す。
+  web は全内部呼び出しで `tenant_id` を必須送信（`consent_info` の送信漏れも修正）。あわせて
+  過渡運用の `AppState::default_tenant` を撤去（起動時の root 存在確認・ログは維持）。
+- **SEC2 — 本番での開発用シークレット使用を fail-fast 化**: `ISSUER` が `https://` のとき、
+  `KEY_ENCRYPTION_KEY`／`INTERNAL_SERVICE_TOKEN` が未設定（＝ソース埋め込みの開発用既知値）なら
+  api・web とも起動を構成エラーで失敗させる。http（ローカル開発）は従来どおり warning のみ。
+- **SEC1 — ゲスト追放時の権限後始末を fail-closed 化**: `InvitationService::revoke_membership` が
+  「メンバーシップ削除 → best-effort の権限剥奪（失敗しても成功扱い）」だったのを
+  「**権限一括剥奪（失敗時は操作全体を失敗・メンバーシップ維持）→ メンバーシップ削除**」へ反転。
+  管理アクセス判定（`RequirePerms`）は権限行のみを見るため、旧順序では後始末失敗時に追放済み
+  ゲストが管理権限を保持し続けた。`UserPermissionRepository::revoke_all_for_user_in_tenant`
+  （単一トランザクションの SELECT FOR UPDATE + DELETE、剥奪コード返却）を新設し、キャッシュ
+  デコレータは返却コードを invalidate する。
+
+## 2026-07-12（MT16: テナント分離・権限境界の統合テスト）
+
+- **統合テスト新設**（ADR-0009 §8 の negative test 必須方針。`crates/api/tests/tenant_isolation.rs`）:
+  1. root（`idp.system.admin`）はテナントを作成できるが、作成したテナントの管理 API には一律 403
+     （「器は作れるが中身に触れない」）。システム設定は root scope のみ 200。
+  2. `idp.tenant.admin` の権限境界は scope テナントとの完全一致（他テナント・root へは 403）。
+     `idp.system.admin` の scope = root は DB CHECK 制約でも拒否されることを直接 INSERT で検証。
+  3. テナント間データ分離（利用者・クライアントは他テナントの一覧・検索・取得に現れない = 404）。
+     利用者・クライアントが残るテナントは root でも削除できない（409）。
+  4. ゲスト保護: 招待トークンは「本人 + 当該テナント経路」でのみ承諾可・リプレイ不可・監査ログ非出力。
+     参加先管理者はゲストの `users` レコードへ到達できず（404）、解除時は host scope の権限行のみ
+     後始末される（本体・他 scope は残る）。HOME メンバーシップは解除不可（403）。
+  5. OIDC フロー分離: メンバーシップのない SSO セッションは当該テナントで未認証扱い、テナント A の
+     アクセストークン／クライアントはテナント B の `/userinfo`・`/token` で拒否（per-tenant issuer の
+     完全一致）。ゲストは承諾後に参加先テナントのフローへ SSO で参加できる。
+- **テスト基盤の並走競合を修正**: 新規 DB へ複数テストの setup が並走すると、マイグレーション seed の
+  INSERT と `ensure_active_key`（存在確認→生成の TOCTOU）が競合し、seed 重複エラー・ACTIVE 署名鍵の
+  複数本化が起きていた。`tokio::sync::OnceCell` でプロセス内一度だけ実行するよう
+  `internal_auth.rs`・`oidc_flow.rs`・`tenant_isolation.rs` を直列化。
+- **既存テストの更新漏れ修正**: `oidc_flow.rs` の「未登録 redirect_uri」ケースがテナント経路化（MT9）
+  以前の `/authorize`（プレフィクスなし）のままで 404/400 不一致になっていたのを
+  `/{tenant_id}/authorize` へ修正。
+
 ## 2026-07-11（MT14・MT15: 設定画面 + セルフサービス設定）
 
 - **システム設定基盤（MT14）**: `system_settings` テーブル（`0003_system_settings`。key-value + `is_secret`。

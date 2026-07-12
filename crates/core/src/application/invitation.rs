@@ -250,6 +250,10 @@ impl InvitationService {
 
     /// ゲストメンバーシップを解除する（ゲストの追放。§3）。HOME は解除できない（`Forbidden`）。
     /// 解除時、当該テナントを scope とするそのユーザーの権限行も削除する（§3）。
+    ///
+    /// 順序は fail-closed: **権限剥奪 → メンバーシップ削除**。管理アクセス判定（`RequirePerms`）は
+    /// 権限行のみを見るため、権限剥奪が失敗した場合は操作全体を失敗させる（メンバーシップを残す）。
+    /// 逆順にすると、権限の後始末が失敗したとき追放済みゲストが管理権限を保持し続けてしまう。
     pub async fn revoke_membership(
         &self,
         host: TenantContext,
@@ -269,29 +273,17 @@ impl InvitationService {
             ));
         }
 
+        // 当該テナントを scope とする権限行を一括削除する（§3）。失敗時はここで中断し、
+        // メンバーシップは削除しない（fail-closed。キャッシュ invalidation は repository 側）。
+        self.permissions
+            .revoke_all_for_user_in_tenant(host_id, target_user_id)
+            .await
+            .map_err(|e| InvitationError::Internal(e.to_string()))?;
+
         self.memberships
             .delete(host_id, target_user_id)
             .await
             .map_err(|e| InvitationError::Internal(e.to_string()))?;
-
-        // 当該テナントを scope とする権限行を削除する（§3）。付与済みコードを列挙して個別に剥奪する
-        // （各剥奪は権限キャッシュも invalidate される）。
-        match self
-            .permissions
-            .list_codes_for_user(host_id, target_user_id)
-            .await
-        {
-            Ok(codes) => {
-                for code in codes {
-                    if let Err(e) = self.permissions.revoke(host_id, target_user_id, &code).await {
-                        tracing::error!(error = %e, "failed to revoke tenant-scoped permission on membership removal");
-                    }
-                }
-            }
-            Err(e) => {
-                tracing::error!(error = %e, "failed to list permissions on membership removal");
-            }
-        }
 
         self.audit
             .record(
@@ -446,6 +438,8 @@ mod tests {
     #[derive(Default)]
     struct FakePermissions {
         granted: Mutex<Vec<(TenantId, Uuid, String)>>,
+        /// 一括剥奪を失敗させる（後始末失敗で操作全体が中断されることの検証用）。
+        fail_revoke_all: bool,
     }
     #[async_trait]
     impl UserPermissionRepository for FakePermissions {
@@ -489,6 +483,25 @@ mod tests {
                 .unwrap()
                 .retain(|(t, u, c)| !(*t == tenant_id && *u == user_id && c == code));
             Ok(())
+        }
+        async fn revoke_all_for_user_in_tenant(
+            &self,
+            tenant_id: TenantId,
+            user_id: Uuid,
+        ) -> DomainResult<Vec<String>> {
+            if self.fail_revoke_all {
+                return Err(crate::domain::error::DomainError::Repository(
+                    "simulated failure".to_string(),
+                ));
+            }
+            let mut granted = self.granted.lock().unwrap();
+            let revoked: Vec<String> = granted
+                .iter()
+                .filter(|(t, u, _)| *t == tenant_id && *u == user_id)
+                .map(|(_, _, c)| c.clone())
+                .collect();
+            granted.retain(|(t, u, _)| !(*t == tenant_id && *u == user_id));
+            Ok(revoked)
         }
     }
 
@@ -744,6 +757,45 @@ mod tests {
         // host scope の権限は消え、other scope は残る。
         let remaining = permissions.granted.lock().unwrap().clone();
         assert_eq!(remaining, vec![(other, guest, "idp.tenant.admin".to_string())]);
+    }
+
+    #[tokio::test]
+    async fn revoke_aborts_when_permission_cleanup_fails() {
+        // 権限の後始末に失敗したら操作全体を失敗させ、メンバーシップを残す（fail-closed）。
+        // 逆だと追放済みゲストが権限行を通じて管理アクセスを保持し続ける。
+        let host: TenantId = Uuid::now_v7().into();
+        let home: TenantId = Uuid::now_v7().into();
+        let guest = Uuid::new_v4();
+        let memberships = Arc::new(FakeMemberships::default());
+        memberships.rows.lock().unwrap().push(TenantMembership {
+            tenant_id: host,
+            user_id: guest,
+            membership_type: MembershipType::Guest,
+            status: MembershipStatus::Active,
+            invited_by: None,
+            invitation_token_hash: None,
+            invitation_expires_at: None,
+            created_at: now(),
+            updated_at: now(),
+        });
+        let permissions = Arc::new(FakePermissions {
+            fail_revoke_all: true,
+            ..Default::default()
+        });
+        let svc = service(
+            Some(test_user(guest, home)),
+            memberships.clone(),
+            permissions,
+            Arc::new(CapturingSink::default()),
+        );
+
+        assert!(matches!(
+            svc.revoke_membership(TenantContext::new(host), guest, Uuid::new_v4(), &ctx())
+                .await,
+            Err(InvitationError::Internal(_))
+        ));
+        // メンバーシップは削除されない（権限が残る限りメンバーでもあり続ける）。
+        assert_eq!(memberships.rows.lock().unwrap().len(), 1);
     }
 
     #[tokio::test]

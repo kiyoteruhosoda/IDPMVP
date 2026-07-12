@@ -3,17 +3,16 @@
 //! `TEST_DATABASE_URL` 設定時のみ実行:
 //!   TEST_DATABASE_URL='mysql://idp:idp@127.0.0.1:3306/idp' cargo test --test keys
 
+mod support;
+
 use chrono::{DateTime, Utc};
 use idp_api::application::key_service::KeyService;
 use idp_api::domain::clock::Clock;
 use idp_api::infrastructure::jwt;
 use idp_api::infrastructure::repositories::signing_key::SqlxSigningKeyRepository;
 use serde::{Deserialize, Serialize};
-use sqlx::mysql::MySqlPoolOptions;
 use sqlx::Row;
 use std::sync::Arc;
-
-static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations");
 
 struct FixedClock(DateTime<Utc>);
 impl Clock for FixedClock {
@@ -29,18 +28,13 @@ struct Claims {
     exp: usize,
 }
 
-#[tokio::test]
+// RSA 鍵生成は同期 CPU 処理のため、並走ブートストラップの検証にはマルチスレッドランタイムを使う
+// （current_thread だと keygen がリアクタをブロックし、他タスクの DB I/O が進まない）。
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn ensure_key_is_idempotent_and_token_verifies_against_jwks() {
-    let Ok(url) = std::env::var("TEST_DATABASE_URL") else {
-        eprintln!("TEST_DATABASE_URL not set; skipping key service integration test");
+    let Some(pool) = support::connect_pool("key service").await else {
         return;
     };
-
-    let pool = MySqlPoolOptions::new()
-        .connect(&url)
-        .await
-        .expect("connect to test database");
-    MIGRATOR.run(&pool).await.expect("run migrations");
 
     let repo = Arc::new(SqlxSigningKeyRepository::new(pool.clone()));
     let clock = Arc::new(FixedClock(Utc::now()));
@@ -49,11 +43,28 @@ async fn ensure_key_is_idempotent_and_token_verifies_against_jwks() {
     let kek = *idp_api::config::Config::from_env()
         .expect("config")
         .key_encryption_key();
-    let service = KeyService::new(repo, clock, kek);
+    let service = Arc::new(KeyService::new(repo, clock, kek));
 
-    // 冪等性: 2 回呼んでも ACTIVE 鍵は増えない。
-    service.ensure_active_key().await.expect("ensure #1");
-    service.ensure_active_key().await.expect("ensure #2");
+    // 並走レースを実際に起こすため、鍵テーブルを空にしてから同時ブートストラップする
+    // （本テストバイナリは単独でこのテーブルを扱い、cargo はバイナリを逐次実行する）。
+    sqlx::query("DELETE FROM signing_keys")
+        .execute(&pool)
+        .await
+        .expect("clear signing keys");
+
+    // 並走安全性（SEC5）: 複数インスタンスの同時ブートストラップでも ACTIVE 鍵は 1 本
+    // （`insert_if_no_active` の advisory lock による排他区間）。
+    let mut tasks = Vec::new();
+    for _ in 0..8 {
+        let svc = service.clone();
+        tasks.push(tokio::spawn(async move { svc.ensure_active_key().await }));
+    }
+    for task in tasks {
+        task.await.expect("join").expect("concurrent ensure");
+    }
+
+    // 冪等性: さらに呼んでも ACTIVE 鍵は増えない。
+    service.ensure_active_key().await.expect("ensure again");
 
     let active_count: i64 =
         sqlx::query("SELECT COUNT(*) AS c FROM signing_keys WHERE status = 'ACTIVE'")

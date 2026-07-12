@@ -17,6 +17,7 @@ pub mod dto;
 pub mod handlers;
 pub mod i18n;
 pub mod router;
+pub mod security_headers;
 pub mod state;
 pub mod telemetry;
 pub mod templates;

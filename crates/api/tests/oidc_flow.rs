@@ -5,176 +5,28 @@
 //!
 //! テストデータ（client / user）は実行ごとにランダムな識別子で作成し、既存データと干渉しない。
 
+mod support;
+
 use axum::body::Body;
-use axum::http::header::{AUTHORIZATION, CONTENT_TYPE, COOKIE, LOCATION, SET_COOKIE};
+use axum::http::header::{AUTHORIZATION, CONTENT_TYPE, COOKIE};
 use axum::http::{Request, StatusCode};
-use idp_api::config::Config;
-use idp_api::domain::clock::Clock;
-use idp_api::domain::password::PasswordHasher as _;
-use idp_api::infrastructure::password::Argon2PasswordHasher;
-use idp_api::presentation::router;
-use idp_api::presentation::state::AppState;
 use serde_json::{json, Value};
-use sqlx::mysql::MySqlPoolOptions;
 use sqlx::{MySqlPool, Row};
-use std::sync::Arc;
-use tower::ServiceExt;
+use support::{
+    body_json, cookie_value, location, query_param, send, CODE_CHALLENGE, CODE_VERIFIER,
+    REDIRECT_URI, SERVICE_TOKEN, SERVICE_TOKEN_HEADER,
+};
 
-static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations");
-
-// RFC 7636 Appendix B のテストベクタ（S256）。
-const CODE_VERIFIER: &str = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
-const CODE_CHALLENGE: &str = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM";
-const REDIRECT_URI: &str = "http://localhost:3000/callback";
-// 内部認証エンドポイントのサービストークン（ADR-0007。ログイン画面は web crate へ移設したため、
-// api 単体テストでは資格情報検証を POST /internal/authenticate で駆動する）。
-const SERVICE_TOKEN: &str = "test-internal-service-token";
-const SERVICE_TOKEN_HEADER: &str = "x-internal-auth-token";
-
-struct SystemClock;
-impl Clock for SystemClock {
-    fn now(&self) -> chrono::DateTime<chrono::Utc> {
-        chrono::Utc::now()
-    }
-}
-
-struct TestEnv {
-    app: axum::Router,
-    pool: MySqlPool,
-    issuer: String,
-    /// 過渡期（MT9 まで）の既定テナント = seed 済み root テナントの UUID。
-    root_tenant_id: String,
-}
-
-async fn setup() -> Option<TestEnv> {
-    let Ok(url) = std::env::var("TEST_DATABASE_URL") else {
-        eprintln!("TEST_DATABASE_URL not set; skipping OIDC flow integration test");
-        return None;
-    };
-    // 内部認証エンドポイントのサービストークンを既知値に固定する（ログイン駆動に使う）。
-    std::env::set_var("INTERNAL_SERVICE_TOKEN", SERVICE_TOKEN);
-    let pool = MySqlPoolOptions::new()
-        .connect(&url)
-        .await
-        .expect("connect to test database");
-    MIGRATOR.run(&pool).await.expect("run migrations");
-
-    // 過渡期（MT9 まで）: seed 済み root テナントを既定テナントとして注入する。
-    let root_tenant_id: String =
-        sqlx::query_scalar("SELECT id FROM tenants WHERE parent_tenant_id IS NULL")
-            .fetch_one(&pool)
-            .await
-            .expect("root tenant seeded");
-    let root = idp_api::domain::tenant::TenantId::from(
-        uuid::Uuid::parse_str(&root_tenant_id).expect("root UUID"),
-    );
-
-    let config = Arc::new(Config::from_env().expect("load config"));
-    let issuer = config.issuer().to_string();
-    let state = AppState::build(pool.clone(), config, Arc::new(SystemClock), root);
-    state
-        .keys
-        .ensure_active_key()
-        .await
-        .expect("bootstrap signing key");
-    Some(TestEnv {
-        app: router::build(state),
-        pool,
-        issuer,
-        root_tenant_id,
-    })
-}
-
-/// 一意な public client を root テナントへ登録して client_id を返す。
+/// 一意な public client（openid/profile/email）を登録して client_id を返す。
 async fn insert_public_client(pool: &MySqlPool, tenant_id: &str) -> String {
-    let client_id = format!(
-        "e2e-public-{}",
-        &uuid::Uuid::new_v4().simple().to_string()[..12]
-    );
-    sqlx::query(
-        "INSERT INTO clients (id, tenant_id, client_id, client_secret_hash, client_type, \
-         client_status, app_name, redirect_uris, grant_types, response_types, scopes, \
-         token_endpoint_auth_method, require_pkce) \
-         VALUES (?, ?, ?, NULL, 'public', 'ACTIVE', 'E2E Test App', ?, \
-         '[\"authorization_code\"]', '[\"code\"]', '[\"openid\",\"profile\",\"email\"]', 'none', 1)",
-    )
-    .bind(uuid::Uuid::now_v7().to_string())
-    .bind(tenant_id)
-    .bind(&client_id)
-    .bind(json!([REDIRECT_URI]).to_string())
-    .execute(pool)
-    .await
-    .expect("insert public client");
-    client_id
+    support::insert_public_client(pool, tenant_id, &["openid", "profile", "email"]).await
 }
 
-/// 一意な confidential client を root テナントへ登録して `(client_id, client_secret)` を返す。
+/// 一意な confidential client（openid のみ）を登録して `(client_id, client_secret)` を返す。
 async fn insert_confidential_client(pool: &MySqlPool, tenant_id: &str) -> (String, String) {
-    let client_id = format!(
-        "e2e-conf-{}",
-        &uuid::Uuid::new_v4().simple().to_string()[..12]
-    );
-    let secret = "e2e-super-secret-value";
-    let secret_hash = Argon2PasswordHasher::new()
-        .hash(secret)
-        .expect("hash secret");
-    sqlx::query(
-        "INSERT INTO clients (id, tenant_id, client_id, client_secret_hash, client_type, \
-         client_status, app_name, redirect_uris, grant_types, response_types, scopes, \
-         token_endpoint_auth_method, require_pkce) \
-         VALUES (?, ?, ?, ?, 'confidential', 'ACTIVE', 'E2E Confidential App', ?, \
-         '[\"authorization_code\"]', '[\"code\"]', '[\"openid\"]', 'client_secret_basic', 1)",
-    )
-    .bind(uuid::Uuid::now_v7().to_string())
-    .bind(tenant_id)
-    .bind(&client_id)
-    .bind(secret_hash)
-    .bind(json!([REDIRECT_URI]).to_string())
-    .execute(pool)
-    .await
-    .expect("insert confidential client");
-    (client_id, secret.to_string())
+    support::insert_confidential_client(pool, tenant_id, &["openid"]).await
 }
 
-async fn send(app: &axum::Router, request: Request<Body>) -> axum::response::Response {
-    app.clone().oneshot(request).await.expect("send request")
-}
-
-async fn body_json(response: axum::response::Response) -> Value {
-    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("read body");
-    serde_json::from_slice(&bytes).unwrap_or(Value::Null)
-}
-
-/// `Set-Cookie` ヘッダ群から `name` の値を取り出す。
-fn cookie_value(response: &axum::response::Response, name: &str) -> Option<String> {
-    response.headers().get_all(SET_COOKIE).iter().find_map(|v| {
-        let raw = v.to_str().ok()?;
-        let (k, rest) = raw.split_once('=')?;
-        (k == name).then(|| rest.split(';').next().unwrap_or("").to_string())
-    })
-}
-
-fn location(response: &axum::response::Response) -> String {
-    response
-        .headers()
-        .get(LOCATION)
-        .expect("Location header")
-        .to_str()
-        .unwrap()
-        .to_string()
-}
-
-fn query_param(url: &str, name: &str) -> Option<String> {
-    url::Url::parse(url)
-        .expect("parse redirect URL")
-        .query_pairs()
-        .find(|(k, _)| k == name)
-        .map(|(_, v)| v.into_owned())
-}
-
-/// 条件 1: ユーザー登録。sub を返す。
 async fn register_user(
     app: &axum::Router,
     tenant: &str,
@@ -220,12 +72,14 @@ fn login_csrf(auth_session: &str) -> String {
 /// `X-Forwarded-For` を渡すと監査・レート制限に反映される。結果は `result` タグ付き JSON。
 async fn internal_authenticate(
     app: &axum::Router,
+    tenant: &str,
     auth_session: &str,
     username: &str,
     password: &str,
     csrf: &str,
 ) -> (StatusCode, Value) {
     let body = json!({
+        "tenant_id": tenant,
         "auth_session_id": auth_session,
         "username": username,
         "password": password,
@@ -258,12 +112,13 @@ async fn audit_count(pool: &MySqlPool, client_id: &str, event_type: &str) -> i64
 
 #[tokio::test]
 async fn full_authorization_code_flow_with_sso_and_audit() {
-    let Some(env) = setup().await else { return };
-    let TestEnv {
+    let Some(env) = support::setup("OIDC flow").await else { return };
+    let support::TestEnv {
         app,
         pool,
         issuer,
         root_tenant_id,
+        ..
     } = env;
 
     let client_id = insert_public_client(&pool, &root_tenant_id).await;
@@ -290,13 +145,13 @@ async fn full_authorization_code_flow_with_sso_and_audit() {
 
     // CSRF トークン不一致は拒否される（result=csrf_mismatch）。
     let (status, body) =
-        internal_authenticate(&app, &auth_session, &username, password, &"0".repeat(64)).await;
+        internal_authenticate(&app, &root_tenant_id, &auth_session, &username, password, &"0".repeat(64)).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["result"], "csrf_mismatch", "csrf mismatch");
 
     // 条件 4, 5, 7: ログイン成功。初回は profile/email が未同意のため同意ステップへ（F3）。
     let (status, body) =
-        internal_authenticate(&app, &auth_session, &username, password, &csrf).await;
+        internal_authenticate(&app, &root_tenant_id, &auth_session, &username, password, &csrf).await;
     assert_eq!(status, StatusCode::OK, "login success");
     assert_eq!(body["result"], "consent_required", "first login needs consent");
     let sso_cookie = body["sso_session_id"]
@@ -317,7 +172,8 @@ async fn full_authorization_code_flow_with_sso_and_audit() {
             .header(CONTENT_TYPE, "application/json")
             .header(SERVICE_TOKEN_HEADER, SERVICE_TOKEN)
             .body(Body::from(
-                json!({ "auth_session_id": consent_session }).to_string(),
+                json!({ "tenant_id": root_tenant_id, "auth_session_id": consent_session })
+                    .to_string(),
             ))
             .unwrap(),
     )
@@ -536,8 +392,8 @@ async fn full_authorization_code_flow_with_sso_and_audit() {
 
 #[tokio::test]
 async fn invalid_authorize_and_client_auth_failures() {
-    let Some(env) = setup().await else { return };
-    let TestEnv {
+    let Some(env) = support::setup("OIDC flow").await else { return };
+    let support::TestEnv {
         app,
         pool,
         root_tenant_id,
@@ -563,7 +419,7 @@ async fn invalid_authorize_and_client_auth_failures() {
         &app,
         Request::builder()
             .uri(format!(
-                "/authorize?response_type=code&client_id={client_id}&redirect_uri=https%3A%2F%2Fevil.example.com%2Fcb&scope=openid&state=s&nonce=n&code_challenge={CODE_CHALLENGE}&code_challenge_method=S256"
+                "/{root_tenant_id}/authorize?response_type=code&client_id={client_id}&redirect_uri=https%3A%2F%2Fevil.example.com%2Fcb&scope=openid&state=s&nonce=n&code_challenge={CODE_CHALLENGE}&code_challenge_method=S256"
             ))
             .body(Body::empty())
             .unwrap(),
@@ -635,8 +491,8 @@ async fn invalid_authorize_and_client_auth_failures() {
 
 #[tokio::test]
 async fn login_lockout_after_repeated_failures() {
-    let Some(env) = setup().await else { return };
-    let TestEnv {
+    let Some(env) = support::setup("OIDC flow").await else { return };
+    let support::TestEnv {
         app,
         pool,
         root_tenant_id,
@@ -663,7 +519,7 @@ async fn login_lockout_after_repeated_failures() {
     // 9 回失敗 → invalid_credentials、10 回目でロック（locked）。
     for attempt in 1..=10 {
         let (status, body) =
-            internal_authenticate(&app, &auth_session, &username, "wrong-password", &csrf).await;
+            internal_authenticate(&app, &root_tenant_id, &auth_session, &username, "wrong-password", &csrf).await;
         assert_eq!(status, StatusCode::OK, "attempt {attempt}");
         let expected = if attempt < 10 {
             "invalid_credentials"
@@ -674,7 +530,7 @@ async fn login_lockout_after_repeated_failures() {
     }
 
     // ロック中は正しいパスワードでも拒否される。
-    let (_, body) = internal_authenticate(&app, &auth_session, &username, password, &csrf).await;
+    let (_, body) = internal_authenticate(&app, &root_tenant_id, &auth_session, &username, password, &csrf).await;
     assert_eq!(body["result"], "locked", "locked account");
 
     // 監査ログ: login.failed が 10 件以上、login.locked が 2 件以上（ロック時 + ロック中の試行）。
