@@ -1,6 +1,6 @@
 //! マイグレーション整合の統合テスト。
 //!
-//! `TEST_DATABASE_URL` が設定されているときのみ実行する（未設定なら早期リターンで PASS）。
+//! `TEST_DATABASE_URL` を必須として実行する（未設定は失敗。ローカルで意図的に省略する場合のみ `IDP_ALLOW_DB_TEST_SKIP=1`）。
 //! ローカルでは docker-compose の MariaDB を使い、例えば次のように実行する:
 //!   TEST_DATABASE_URL='mysql://idp:idp@127.0.0.1:3306/idp' cargo test --test schema
 //!
@@ -55,8 +55,11 @@ fn assert_uuid_v7(id: &str, label: &str) {
 #[tokio::test]
 async fn migrations_apply_and_multi_tenant_guarantees_hold() {
     let Ok(url) = std::env::var("TEST_DATABASE_URL") else {
-        eprintln!("TEST_DATABASE_URL not set; skipping schema integration test");
-        return;
+        if std::env::var("IDP_ALLOW_DB_TEST_SKIP").ok().as_deref() == Some("1") {
+            eprintln!("TEST_DATABASE_URL not set; intentionally skipping schema integration test");
+            return;
+        }
+        panic!("TEST_DATABASE_URL is required for schema integration test; set IDP_ALLOW_DB_TEST_SKIP=1 only for local unit-only runs");
     };
 
     let pool = MySqlPoolOptions::new()

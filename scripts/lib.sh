@@ -17,18 +17,22 @@ DEPLOY_COMPOSE_FILE="docker-compose.deploy.yml"
 # デプロイに必要なイメージ（api/web/migrate）がローカルに揃っていることを保証する。
 # 無ければ pull を試み（レジストリ配布）、それでも無ければ die（tar 配布なら事前に docker load 済みが前提）。
 # デプロイ先はソースを持たないため、ここでビルドはしない。
+ensure_image() {
+  local svc="$1" ref
+  ref="$(image_ref "$svc")"
+  if docker image inspect "$ref" >/dev/null 2>&1; then
+    return 0
+  fi
+  log "ローカルに $ref がありません。pull を試みます..."
+  docker pull "$ref" >/dev/null 2>&1 ||
+    die "必要なイメージが揃っていません: $ref。ソース側で ./scripts/build.sh --docker --push、または --save して転送し docker load -i してください。"
+}
+
 ensure_images() {
-  local missing=0 ref
+  local svc
   for svc in api web migrate; do
-    ref="$(image_ref "$svc")"
-    if docker image inspect "$ref" >/dev/null 2>&1; then
-      continue
-    fi
-    log "ローカルに $ref がありません。pull を試みます..."
-    docker pull "$ref" >/dev/null 2>&1 || { log "pull できませんでした: $ref"; missing=1; }
+    ensure_image "$svc"
   done
-  [[ $missing -eq 0 ]] ||
-    die "必要なイメージが揃っていません。ソース側で ./scripts/build.sh --docker --push（レジストリ）、または --save して転送し docker load -i してください。"
 }
 
 # 利用可能な Compose コマンド（v2: `docker compose` / v1: `docker-compose`）を返す。
@@ -40,6 +44,34 @@ compose_cmd() {
   else
     die "docker compose（v2）または docker-compose（v1）が見つかりません。"
   fi
+}
+
+# .env を .env.example から生成する。既存 .env は上書きしない。
+ensure_env_file() {
+  local env_file="$1" example_file="$2"
+  if [[ -f "$env_file" ]]; then
+    log "既存の .env を使用します（上書きしません）。"
+    return 0
+  fi
+  [[ -f "$example_file" ]] || die ".env.example が見つかりません。"
+  command -v openssl >/dev/null 2>&1 || die "openssl が見つかりません。"
+  log ".env を新規生成します（秘密情報を乱数生成）。"
+  cp "$example_file" "$env_file"
+  local db_password root_password key_encryption_key internal_service_token csrf_secret
+  db_password="$(openssl rand -hex 24)"
+  root_password="$(openssl rand -hex 24)"
+  key_encryption_key="$(openssl rand -base64 32)"
+  internal_service_token="$(openssl rand -hex 32)"
+  csrf_secret="$(openssl rand -base64 32)"
+  set_env_var MARIADB_PASSWORD       "$db_password"                                  "$env_file"
+  set_env_var MARIADB_ROOT_PASSWORD  "$root_password"                                "$env_file"
+  set_env_var KEY_ENCRYPTION_KEY     "$key_encryption_key"                           "$env_file"
+  set_env_var INTERNAL_SERVICE_TOKEN "$internal_service_token"                       "$env_file"
+  set_env_var CSRF_SECRET            "$csrf_secret"                                  "$env_file"
+  set_env_var DATABASE_URL           "mysql://idp:${db_password}@127.0.0.1:3306/idp" "$env_file"
+  set_env_var TEST_DATABASE_URL      "mysql://idp:${db_password}@127.0.0.1:3306/idp" "$env_file"
+  chmod 600 "$env_file"
+  log ".env を生成しました（パーミッション 600）。"
 }
 
 # .env の KEY 行を VALUE で置換する（無ければ追記）。VALUE は sed を通さず printf で
