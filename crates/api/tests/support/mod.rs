@@ -72,7 +72,9 @@ pub struct TestEnv {
 pub async fn connect_pool(test_name: &str) -> Option<MySqlPool> {
     let Ok(url) = std::env::var("TEST_DATABASE_URL") else {
         if std::env::var("IDP_ALLOW_DB_TEST_SKIP").ok().as_deref() == Some("1") {
-            eprintln!("TEST_DATABASE_URL not set; intentionally skipping {test_name} integration test");
+            eprintln!(
+                "TEST_DATABASE_URL not set; intentionally skipping {test_name} integration test"
+            );
             return None;
         }
         panic!("TEST_DATABASE_URL is required for {test_name} integration test; set IDP_ALLOW_DB_TEST_SKIP=1 only for local unit-only runs");

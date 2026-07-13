@@ -326,7 +326,13 @@ impl<'a> ConfigResolver<'a> {
         let db_allowed = runtime_setting_definition(key)
             .map(|def| def.owner == SettingOwner::DbManaged)
             .unwrap_or(false);
-        if db_allowed && self.db_settings.get(key).filter(|v| !v.is_empty()).is_some() {
+        if db_allowed
+            && self
+                .db_settings
+                .get(key)
+                .filter(|v| !v.is_empty())
+                .is_some()
+        {
             SettingSource::Db
         } else {
             SettingSource::Builtin
@@ -517,8 +523,6 @@ mod tests {
         assert_eq!(hsts.source, SettingSource::Env);
         std::env::remove_var("HSTS_MAX_AGE");
     }
-
-
 
     #[test]
     fn env_locked_settings_ignore_db_values() {

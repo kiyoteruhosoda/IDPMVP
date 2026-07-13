@@ -45,7 +45,11 @@ async fn count(pool: &MySqlPool, sql: &str) -> i64 {
 /// UUIDv7 の正準文字列（36 文字・version ニブル '7'・variant ニブル 8〜b）であること。
 fn assert_uuid_v7(id: &str, label: &str) {
     assert_eq!(id.len(), 36, "{label}: length");
-    assert_eq!(id.as_bytes()[14], b'7', "{label}: version nibble must be 7 in {id}");
+    assert_eq!(
+        id.as_bytes()[14],
+        b'7',
+        "{label}: version nibble must be 7 in {id}"
+    );
     assert!(
         matches!(id.as_bytes()[19], b'8' | b'9' | b'a' | b'b'),
         "{label}: variant nibble must be 8..b in {id}"
@@ -83,12 +87,11 @@ async fn migrations_apply_and_multi_tenant_guarantees_hold() {
     }
 
     // --- seed: root テナント（動的採番の UUIDv7。ADR-0009 §1） --------------------
-    let root: String =
-        sqlx::query("SELECT id FROM tenants WHERE parent_tenant_id IS NULL")
-            .fetch_one(&pool)
-            .await
-            .expect("root tenant must be seeded")
-            .get(0);
+    let root: String = sqlx::query("SELECT id FROM tenants WHERE parent_tenant_id IS NULL")
+        .fetch_one(&pool)
+        .await
+        .expect("root tenant must be seeded")
+        .get(0);
     assert_uuid_v7(&root, "root tenant id");
 
     // --- seed: 初期管理者（root 所属・HOME メンバーシップ・system.admin。ADR-0009 Phase 1-5）
@@ -131,7 +134,10 @@ async fn migrations_apply_and_multi_tenant_guarantees_hold() {
     .await
     .expect("query admin grant")
     .get::<i64, _>(0);
-    assert_eq!(n, 1, "admin must be granted idp.system.admin with scope = root");
+    assert_eq!(
+        n, 1,
+        "admin must be granted idp.system.admin with scope = root"
+    );
 
     for code in ["idp.system.admin", "idp.tenant.admin"] {
         let n = sqlx::query("SELECT COUNT(*) FROM permissions WHERE code = ?")
@@ -145,11 +151,13 @@ async fn migrations_apply_and_multi_tenant_guarantees_hold() {
 
     // --- 保証 1: root は高々 1 行（is_root 番兵列 + UNIQUE。ADR-0009 §1） ----------
     let second_root = uuid::Uuid::new_v4().to_string();
-    let err = sqlx::query("INSERT INTO tenants (id, parent_tenant_id, name) VALUES (?, NULL, 'evil root')")
-        .bind(&second_root)
-        .execute(&pool)
-        .await
-        .expect_err("inserting a second root tenant must fail");
+    let err = sqlx::query(
+        "INSERT INTO tenants (id, parent_tenant_id, name) VALUES (?, NULL, 'evil root')",
+    )
+    .bind(&second_root)
+    .execute(&pool)
+    .await
+    .expect_err("inserting a second root tenant must fail");
     assert!(
         err.as_database_error()
             .is_some_and(sqlx::error::DatabaseError::is_unique_violation),
