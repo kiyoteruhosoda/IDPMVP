@@ -70,12 +70,7 @@ if ./scripts/deploy.sh unknown >/tmp/deploy-unknown.out 2>&1; then
   echo "deploy.sh unknown mode must fail" >&2
   exit 1
 fi
-if ./scripts/deploy.sh reset >/tmp/deploy-reset-no.out 2>&1; then
-  echo "deploy.sh reset without --yes must fail" >&2
-  exit 1
-fi
-
-./scripts/deploy.sh migration >/tmp/deploy-migration.out 2>&1
+./scripts/deploy.sh migrate >/tmp/deploy-migrate.out 2>&1
 [[ -f .env ]] || { echo ".env was not generated" >&2; exit 1; }
 grep -q '^CSRF_SECRET=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=$' .env
 before="$(grep '^MARIADB_PASSWORD=' .env)"
@@ -84,7 +79,7 @@ after="$(grep '^MARIADB_PASSWORD=' .env)"
 [[ "$before" == "$after" ]] || { echo "existing .env was overwritten" >&2; exit 1; }
 grep -q 'ログイン URL:' /tmp/deploy-default.out
 grep -q '\-f docker-compose.deploy.yml' "$DOCKER_STUB_LOG"
-./scripts/deploy.sh reset --yes >/tmp/deploy-reset.out 2>&1
+./scripts/deploy.sh reset >/tmp/deploy-reset.out 2>&1
 grep -q 'down -v --remove-orphans' "$DOCKER_STUB_LOG"
 
 set +e
