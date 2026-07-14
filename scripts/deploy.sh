@@ -2,9 +2,9 @@
 # deploy.sh — デプロイ先の単一入口。初回も更新もこれ 1 本（build.sh が作る dist/ に同梱される）。
 #
 # 使い方:
-#   ./deploy.sh              デプロイ（初回は .env を自動生成。イメージ読込 → migration → 起動 → readiness 確認）
-#   ./deploy.sh migration    DB 起動と migration（あれば DB 更新）のみ
-#   ./deploy.sh reset --yes  DB を初期化（volume 削除）してからデプロイし直す
+#   ./deploy.sh          デプロイ（初回は .env を自動生成。イメージ読込 → migrate → 起動 → readiness 確認）
+#   ./deploy.sh migrate  DB 起動と migrate（あれば DB 更新）のみ
+#   ./deploy.sh reset    DB を初期化（volume 削除）してからデプロイし直す（破壊的操作）
 #
 # 前提: docker（Compose v2 または docker-compose v1）と openssl。ソース不要・ビルドしない。
 set -Eeuo pipefail
@@ -37,11 +37,9 @@ example_file="$base/.env.example"
 
 # --- 引数 -------------------------------------------------------------------------
 mode="deploy"
-yes=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    migration | reset) mode="$1" ;;
-    --yes) yes=1 ;;
+    migrate | reset) mode="$1" ;;
     -h | --help) usage; exit 0 ;;
     *) usage; exit 2 ;;
   esac
@@ -222,8 +220,8 @@ ensure_images() {
 }
 
 # --- 各フェーズ ---------------------------------------------------------------------
-run_migration() {
-  phase_begin "migration"
+run_migrate() {
+  phase_begin "migrate"
   log "MariaDB を起動します..."
   $compose up -d mariadb
   wait_healthy mariadb
@@ -246,7 +244,7 @@ run_deploy() {
   phase_begin "images"
   ensure_images
   phase_end
-  run_migration
+  run_migrate
   phase_begin "app"
   log "api・web・proxy を起動します..."
   $compose up -d api web proxy
@@ -282,14 +280,13 @@ case "$mode" in
   deploy)
     run_deploy
     ;;
-  migration)
+  migrate)
     phase_begin "images"
     ensure_images
     phase_end
-    run_migration
+    run_migrate
     ;;
   reset)
-    [[ $yes -eq 1 ]] || die "reset は破壊的操作です（DB volume を削除します）。実行するには --yes を付けてください。"
     phase_begin "reset"
     log "DB volume を削除します（.env は保持します）。"
     $compose down -v --remove-orphans

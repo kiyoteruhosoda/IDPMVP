@@ -16,7 +16,7 @@
 | スクリプト | 用途 |
 |---|---|
 | `build.sh` | **ビルド側**: Docker イメージ（api/web/migrate）をビルドし、tar ＋ デプロイ一式を `dist/` へ出力 |
-| `deploy.sh` | **デプロイ先**: デプロイの単一入口（初回・更新・migration・reset）。`dist/` に同梱される |
+| `deploy.sh` | **デプロイ先**: デプロイの単一入口（初回・更新・migrate・reset）。`dist/` に同梱される |
 | `e2e.sh` | web→api の疎通 E2E（api・web を実プロセス起動して HTTP で検証） |
 | `test_deploy.sh` | `deploy.sh` の CLI/エラー処理をスタブ docker で検証（CI 用） |
 
@@ -43,9 +43,9 @@ dist/
 ## deploy.sh — デプロイ（デプロイ先・単一入口）
 
 ```bash
-./deploy.sh              # デプロイ（初回は .env 自動生成 → イメージ読込 → migration → 起動 → readiness 確認）
-./deploy.sh migration    # DB 起動と migration（あれば DB 更新）のみ
-./deploy.sh reset --yes  # DB を初期化（volume 削除）してからデプロイし直す
+./deploy.sh          # デプロイ（初回は .env 自動生成 → イメージ読込 → migrate → 起動 → readiness 確認）
+./deploy.sh migrate  # DB 起動と migrate（あれば DB 更新）のみ
+./deploy.sh reset    # DB を初期化（volume 削除）してからデプロイし直す（破壊的操作）
 ```
 
 - 初回実行時に `.env` を `.env.example` から自動生成し、秘密情報（DB パスワード・
@@ -55,7 +55,7 @@ dist/
 - イメージは隣の `idp-*.tar` から自動で `docker load` する（読込済みで manifest と一致すればスキップ）。
 - 使う Compose ファイルは固定: バンドル内では同梱の `docker-compose.yml`、リポジトリ内から実行した
   場合はルートの `docker-compose.deploy.yml`。選択の余地はない。
-- `reset` は DB volume を削除する破壊的操作のため `--yes` が必須。`.env` は保持される。
+- `reset` は DB volume を削除する破壊的操作（確認なしで即実行される）。`.env` は保持される。
 
 前提: `docker`（Compose v2 または v1）と `openssl`。
 

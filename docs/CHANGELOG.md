@@ -2,6 +2,16 @@
 
 完了した重要な変更の要約（詳しい経緯は `history/`、設計判断は `adr/`）。
 
+## 2026-07-14（deploy.sh の CLI 整理・CPU 制限の撤去）
+
+- **deploy.sh — `migration` を `migrate` に改名**: サブコマンド名を compose の `migrate` サービス名と
+  揃えた（`./deploy.sh migrate`）。フェーズログも `phase=migrate` に統一。
+- **deploy.sh — `reset` から `--yes` 要求を撤廃**: `./deploy.sh reset` は確認フラグなしで即実行される
+  破壊的操作になった。
+- **docker-compose.deploy.yml — `cpus:` 制限を撤去**: Synology 等 CFS バンド幅制御
+  （cgroup `cpu.cfs_quota`）非対応カーネルで `docker compose up` が
+  `NanoCPUs can not be set` で失敗する不具合を修正。`mem_limit` / `pids_limit` は維持。
+
 ## 2026-07-13（build/deploy スクリプトの簡素化）
 
 - **build.sh — tar バンドル出力を既定化**: 引数なしで Docker イメージ（api/web/migrate）をビルドし、
