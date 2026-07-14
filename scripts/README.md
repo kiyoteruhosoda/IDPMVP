@@ -43,8 +43,8 @@ dist/
 ## deploy.sh — デプロイ（デプロイ先・単一入口）
 
 ```bash
-./deploy.sh          # デプロイ（初回は .env 自動生成 → イメージ読込 → migrate → 起動 → readiness 確認）
-./deploy.sh migrate  # DB 起動と migrate（あれば DB 更新）のみ
+./deploy.sh app      # デプロイ（初回は .env 自動生成 → イメージ読込 → 起動 → readiness 確認）
+./deploy.sh migrate  # DB 起動と migrate（あれば DB 更新）後、アプリコンテナも入れ替える
 ./deploy.sh reset    # DB を初期化（volume 削除）してからデプロイし直す（破壊的操作）
 ```
 
@@ -68,7 +68,7 @@ scp -r dist/ deploy-host:/opt/idp/            # 転送（例）
 
 # === デプロイ先（別ホスト。ソース不要） ===
 cd /opt/idp/dist
-./deploy.sh          # 初回も更新もこれだけ
+./deploy.sh app      # 初回も更新もこれだけ
 ```
 
 更新は新しい `dist/` を上書き転送して `./deploy.sh` を再実行する。ロールバックは前のバージョンの

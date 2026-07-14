@@ -145,7 +145,7 @@ sequenceDiagram
 
 ```sh
 ./scripts/build.sh             # イメージビルド → dist/ にデプロイバンドルを出力
-./scripts/deploy.sh            # 初回も更新もこれ 1 本（既存 .env は上書きしない）
+./scripts/deploy.sh app        # 初回も更新も app モードで実行（既存 .env は上書きしない）
 ```
 
 初期管理ユーザー `admin@example.com`（既定パスワードは初回ログイン後に変更）が seed される。

@@ -281,7 +281,7 @@ IMAGE_TAG=1.0.0 ./scripts/build.sh  # イメージタグを指定（既定 lates
 
 ```sh
 cd /opt/idp/dist   # 転送先（例）
-./deploy.sh
+./deploy.sh app
 ```
 
 内容: 初回は秘密情報（DB パスワード・`KEY_ENCRYPTION_KEY`・`INTERNAL_SERVICE_TOKEN`・`CSRF_SECRET`）を
