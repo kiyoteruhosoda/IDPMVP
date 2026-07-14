@@ -2,7 +2,7 @@
 # deploy.sh — デプロイ先の単一入口（app / migrate / reset）。
 #
 # 使い方（モード引数は必須）:
-#   ./deploy.sh app      通常デプロイ（アプリコンテナを必ず入れ替える。DB スキーマ変更なし）
+#   ./deploy.sh app      通常デプロイ（migration を冪等に適用し、アプリコンテナを必ず入れ替える）
 #   ./deploy.sh migrate  DDL 更新時（migration 適用後、アプリコンテナも必ず入れ替える）
 #   ./deploy.sh reset    DB 初期化（volume 削除）後、migration 適用とアプリコンテナ入れ替えを行う
 #
@@ -49,6 +49,10 @@ elif command -v docker-compose >/dev/null 2>&1; then
   compose=(docker-compose -f "$compose_file")
 else
   die "docker compose（v2）または docker-compose（v1）が見つかりません。"
+fi
+
+if ! docker info >/dev/null 2>&1; then
+  die "Docker daemon に接続できません（daemon 停止または権限不足）。docker info が成功する状態で再実行してください。"
 fi
 
 CURRENT_PHASE="startup"
@@ -254,6 +258,7 @@ case "$mode" in
     ;;
   app)
     phase_begin "database"; start_database; phase_end
+    phase_begin "migrate"; run_migrations_with_retry; phase_end
     ;;
 esac
 

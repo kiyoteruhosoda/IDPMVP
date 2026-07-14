@@ -8,6 +8,10 @@
   `./deploy.sh app` に明示化し、`migrate` / `reset` でも DB 処理後に `api`・`web`・`proxy` を
   `--force-recreate` で必ず作り直す。tar 読み込み進捗、CRLF 除去、詳細診断、migration retry を統合。
 
+- **env サンプル — 同一ホスト stg/prod 用テンプレートを追加**: `.env.staging.example` は `WEB_PORT=8081` /
+  `IMAGE_TAG=stg`、`.env.production.example` は `WEB_PORT=8080` / `IMAGE_TAG=prod` とし、HTTP 外部接続時の
+  `ISSUER` / `PUBLIC_WEB_BASE_URL` の書き換え箇所を明示。
+
 - **deploy.sh — アプリコンテナを `--force-recreate` で確実に置き換え**: 新イメージを load
   （タグ付け替え）しても、旧イメージのまま restart ループしているコンテナが居座ると `up -d` が
   「変更なし」と判断して置き換えず、古い（壊れた）バイナリが動き続ける不具合を修正。
