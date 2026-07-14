@@ -66,24 +66,48 @@ export PATH="$TMP/bin:$PATH"
 export DOCKER_STUB_LOG="$TMP/docker.log"
 cd "$TMP/repo"
 
+# モードは必須。未知モード・引数なしはどちらも失敗する。
 if ./scripts/deploy.sh unknown >/tmp/deploy-unknown.out 2>&1; then
   echo "deploy.sh unknown mode must fail" >&2
   exit 1
 fi
+if ./scripts/deploy.sh >/tmp/deploy-nomode.out 2>&1; then
+  echo "deploy.sh without a mode must fail" >&2
+  exit 1
+fi
+
+# migrate: .env を生成し、migrate（DDL）とアプリの force-recreate を実行する。
+: >"$DOCKER_STUB_LOG"
 ./scripts/deploy.sh migrate >/tmp/deploy-migrate.out 2>&1
 [[ -f .env ]] || { echo ".env was not generated" >&2; exit 1; }
 grep -q '^CSRF_SECRET=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=$' .env
+grep -q 'run --rm migrate' "$DOCKER_STUB_LOG" || { echo "migrate mode must run migrations" >&2; exit 1; }
+grep -q 'up -d --force-recreate --remove-orphans api web proxy' "$DOCKER_STUB_LOG" \
+  || { echo "migrate mode must force-recreate app containers" >&2; exit 1; }
+grep -q '\-f docker-compose.deploy.yml' "$DOCKER_STUB_LOG"
+
+# app: 既存 .env を上書きせず、migrate は実行せず、アプリだけ force-recreate する。
 before="$(grep '^MARIADB_PASSWORD=' .env)"
-./scripts/deploy.sh >/tmp/deploy-default.out 2>&1
+: >"$DOCKER_STUB_LOG"
+./scripts/deploy.sh app >/tmp/deploy-app.out 2>&1
 after="$(grep '^MARIADB_PASSWORD=' .env)"
 [[ "$before" == "$after" ]] || { echo "existing .env was overwritten" >&2; exit 1; }
-grep -q 'ログイン URL:' /tmp/deploy-default.out
-grep -q '\-f docker-compose.deploy.yml' "$DOCKER_STUB_LOG"
+grep -q 'ログイン URL:' /tmp/deploy-app.out
+grep -q 'up -d --force-recreate --remove-orphans api web proxy' "$DOCKER_STUB_LOG" \
+  || { echo "app mode must force-recreate app containers" >&2; exit 1; }
+if grep -q 'run --rm migrate' "$DOCKER_STUB_LOG"; then
+  echo "app mode must NOT run migrations" >&2
+  exit 1
+fi
+
+# reset: DB volume を削除してからやり直す。
+: >"$DOCKER_STUB_LOG"
 ./scripts/deploy.sh reset >/tmp/deploy-reset.out 2>&1
 grep -q 'down -v --remove-orphans' "$DOCKER_STUB_LOG"
 
+# up 失敗時: 診断（compose ps）を出し、失敗した終了コードを保ち、秘密はマスクする。
 set +e
-DOCKER_STUB_FAIL_UP=1 ./scripts/deploy.sh >/tmp/deploy-fail.out 2>&1
+DOCKER_STUB_FAIL_UP=1 ./scripts/deploy.sh app >/tmp/deploy-fail.out 2>&1
 status=$?
 set -e
 [[ $status -eq 42 ]] || { echo "deploy failure should preserve failing exit code" >&2; cat /tmp/deploy-fail.out >&2; exit 1; }
@@ -106,14 +130,14 @@ done >"$TMP/bundle/manifest.env"
 cd "$TMP/bundle"
 
 : >"$DOCKER_STUB_LOG"
-./deploy.sh >/tmp/deploy-bundle.out 2>&1
+./deploy.sh app >/tmp/deploy-bundle.out 2>&1
 grep -q 'ログイン URL:' /tmp/deploy-bundle.out
 grep -q '\-f docker-compose.yml' "$DOCKER_STUB_LOG"
 
 # manifest と image ID が食い違う場合は tar を読み込み、なお不一致なら失敗する。
 sed -i 's/^api_image_id=.*/api_image_id=sha256:expected-other-id/' manifest.env
 : >"$DOCKER_STUB_LOG"
-if ./deploy.sh >/tmp/deploy-bundle-mismatch.out 2>&1; then
+if ./deploy.sh app >/tmp/deploy-bundle-mismatch.out 2>&1; then
   echo "deploy.sh must fail when image ID mismatches manifest" >&2
   exit 1
 fi

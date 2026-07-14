@@ -1,19 +1,26 @@
 #!/usr/bin/env bash
-# deploy.sh — デプロイ先の単一入口。初回も更新もこれ 1 本（build.sh が作る dist/ に同梱される）。
+# deploy.sh — デプロイ先の単一入口（ソース不要・ビルドしない。build.sh が作る dist/ に同梱）。
 #
-# 使い方:
-#   ./deploy.sh          デプロイ（初回は .env を自動生成。イメージ読込 → migrate → 起動 → readiness 確認）
-#   ./deploy.sh migrate  DB 起動と migrate（あれば DB 更新）のみ
-#   ./deploy.sh reset    DB を初期化（volume 削除）してからデプロイし直す（破壊的操作）
+# モードは必須。どのモードでも新イメージを load し、アプリコンテナ（api・web・proxy）を
+# --force-recreate で必ず作り直す（旧イメージのまま restart ループしているコンテナが居座って
+# 新バイナリが反映されない事故を防ぐ）。DB（mariadb）は落とさない（reset を除く）。
 #
-# 前提: docker（Compose v2 または docker-compose v1）と openssl。ソース不要・ビルドしない。
+# 使い方（デプロイ先の dist/ 内で実行する）:
+#   ./deploy.sh app      アプリのみ更新（DDL 変更なし）。イメージ load → app 作り直し → readiness
+#   ./deploy.sh migrate  DDL 更新時（新しい migration を追加した場合）。app + migrate（DDL・マスタデータ）
+#   ./deploy.sh reset    完全初期化（DB volume 削除。破壊的・確認なし）→ migrate → app 作り直し
+#
+# 初回デプロイは DDL 適用が要るため `migrate`（または `reset`）を使う。以降のアプリ更新は `app`。
+# 前提: docker（Compose v2 または docker-compose v1）と openssl。
 set -Eeuo pipefail
 
-log() { printf '[idp] %s\n' "$*" >&2; }
-die() { printf '[idp][error] %s\n' "$*" >&2; exit 1; }
+log()  { printf '[idp] %s\n' "$*" >&2; }
+warn() { printf '[idp][warn] %s\n' "$*" >&2; }
+err()  { printf '[idp][error] %s\n' "$*" >&2; }
+die()  { err "$*"; exit 1; }
 
 usage() {
-  sed -n '2,9p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
+  sed -n '2,17p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' >&2
 }
 
 # --- 実行場所の解決 ---------------------------------------------------------------
@@ -35,16 +42,22 @@ cd "$base"
 env_file="$base/.env"
 example_file="$base/.env.example"
 
-# --- 引数 -------------------------------------------------------------------------
-mode="deploy"
+# アプリコンテナ（毎回作り直す対象）と、診断でログを見るサービス一覧。
+APP_SERVICES=(api web proxy)
+ALL_SERVICES=(mariadb migrate api web proxy)
+DEPLOYED_REVISION=""
+
+# --- 引数（モード必須） -----------------------------------------------------------
+mode=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    migrate | reset) mode="$1" ;;
+    app | migrate | reset) mode="$1" ;;
     -h | --help) usage; exit 0 ;;
-    *) usage; exit 2 ;;
+    *) usage; die "不明な引数: $1" ;;
   esac
   shift
 done
+[[ -n "$mode" ]] || { usage; die "モードを指定してください（app | migrate | reset）。"; }
 
 command -v docker >/dev/null 2>&1 || die "docker が見つかりません。"
 if docker compose version >/dev/null 2>&1; then
@@ -55,10 +68,7 @@ else
   die "docker compose（v2）または docker-compose（v1）が見つかりません。"
 fi
 
-# --- ログ・診断ヘルパ --------------------------------------------------------------
-CURRENT_PHASE="startup"
-PHASE_STARTED_AT=0
-
+# --- .env の値参照・秘密マスク -----------------------------------------------------
 # .env から KEY の値を取り出す（最後の一致。無ければ空）。
 get_env_var() {
   local key="$1"
@@ -81,86 +91,72 @@ mask_secrets() {
   fi
 }
 
-phase_begin() {
-  CURRENT_PHASE="$1"
-  PHASE_STARTED_AT="$(date +%s)"
-  log "▶ $CURRENT_PHASE を開始します"
-}
-
-phase_end() {
-  log "✓ $CURRENT_PHASE が完了しました ($(($(date +%s) - PHASE_STARTED_AT))s)"
-}
-
-compose_diagnostics() {
-  local service cid image status
+# --- 診断・エラー処理 --------------------------------------------------------------
+# 指定サービスの状態とログ末尾を出す（秘密はマスク）。バインドマウント失敗など
+# コンテナが生成されない起動前エラーもあるため、compose ps -a で全体像も出す。
+dump_module_logs() { # 引数: サービス名...
   {
-    echo "[idp][diagnostic] phase=${CURRENT_PHASE:-unknown}"
+    echo "[idp][diagnostic] mode=${mode:-unknown}"
     echo "[idp][diagnostic] compose ps"
-    $compose ps || true
-    for service in mariadb migrate api web proxy; do
-      cid="$($compose ps -q "$service" 2>/dev/null || true)"
+    $compose ps -a || true
+    local svc cid state image
+    for svc in "$@"; do
+      cid="$($compose ps -aq "$svc" 2>/dev/null || true)"
       [[ -n "$cid" ]] || continue
-      status="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$cid" 2>/dev/null || true)"
+      state="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$cid" 2>/dev/null || true)"
       image="$(docker inspect -f '{{.Image}}' "$cid" 2>/dev/null || true)"
-      echo "[idp][diagnostic] service=$service status=${status:-unknown} image=${image:-unknown}"
-      echo "[idp][diagnostic] logs tail: $service"
-      $compose logs --tail=80 "$service" || true
+      echo "[idp][diagnostic] service=$svc status=${state:-unknown} image=${image:-unknown}"
+      echo "[idp][diagnostic] logs tail: $svc"
+      $compose logs --tail=80 "$svc" || true
     done
   } 2>&1 | mask_secrets >&2
 }
 
-on_deploy_error() {
-  local exit_code="$1" line="$2" command="$3"
+# エラーメッセージを出し、関係サービスのログを出して終了する。
+fail() { # 引数: メッセージ [サービス名...]
   trap - ERR
-  echo "[idp][error] phase=${CURRENT_PHASE:-unknown} line=$line exit=$exit_code command=$command" | mask_secrets >&2
-  compose_diagnostics
-  exit "$exit_code"
+  local msg="$1"
+  shift || true
+  err "$msg"
+  [[ $# -gt 0 ]] && dump_module_logs "$@"
+  err "デプロイに失敗しました（mode=${mode:-unknown}）。"
+  exit 1
 }
-trap 'on_deploy_error $? $LINENO "$BASH_COMMAND"' ERR
 
-# 指定サービスのコンテナが healthy（healthcheck 無い場合は running）になるまで待つ。
+# 想定外のエラー（set -e で中断）でも、全モジュールのログを出し、元の終了コードを保って終わる。
+on_unexpected_error() {
+  local code="$1" line="$2" command="$3"
+  trap - ERR
+  echo "[idp][error] 想定外のエラー: line=$line exit=$code command=$command（mode=${mode:-unknown}）" | mask_secrets >&2
+  dump_module_logs "${ALL_SERVICES[@]}"
+  err "デプロイに失敗しました（mode=${mode:-unknown}）。"
+  exit "$code"
+}
+trap 'on_unexpected_error $? $LINENO "$BASH_COMMAND"' ERR
+
+# 指定サービスが healthy（healthcheck が無い場合は running）になるまで待つ。
+# exited/dead/restarting は「起動できず落ちている」ため即失敗させる（旧イメージのスタブや
+# 設定不備による crash-loop をタイムアウトを待たずに検知する）。
 wait_healthy() {
-  local service="$1" tries="${2:-60}" cid status i
+  local service="$1" tries="${2:-60}" cid state health i
   log "$service の起動を待機します..."
   for ((i = 0; i < tries; i++)); do
     cid="$($compose ps -q "$service" 2>/dev/null || true)"
     if [[ -n "$cid" ]]; then
-      status="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$cid" 2>/dev/null || true)"
-      case "$status" in
-        healthy | running) log "$service: $status"; return 0 ;;
-        exited | dead) compose_diagnostics; die "$service が異常終了しました（status=$status）。" ;;
+      state="$(docker inspect -f '{{.State.Status}}' "$cid" 2>/dev/null || true)"
+      health="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$cid" 2>/dev/null || true)"
+      case "$state" in
+        restarting | exited | dead)
+          fail "$service が起動できず異常終了しています（status=$state）。旧イメージのスタブや設定不備が疑われます。" "$service" ;;
       esac
+      if [[ "$health" == "healthy" || (-z "$health" && "$state" == "running") ]]; then
+        log "$service: ${health:-$state}"
+        return 0
+      fi
     fi
     sleep 2
   done
-  compose_diagnostics
-  die "$service が healthy になりませんでした（タイムアウト）。"
-}
-
-# migrate は DB のみを更新する（アプリコンテナは置き換えない）。だが ensure_images で新イメージを
-# load 済みのため、旧イメージのまま稼働／restart ループしている api・web が居座ると「新イメージは
-# 来ているのに反映されていない」半端な状態になる。それを検知して、完全デプロイが要る旨を明示する。
-warn_stale_app_containers() {
-  local svc cid running_img current_img status prefix tag stale=0
-  prefix="$(get_env_var IMAGE_PREFIX)"
-  tag="$(get_env_var IMAGE_TAG)"
-  for svc in api web; do
-    cid="$($compose ps -q "$svc" 2>/dev/null || true)"
-    [[ -n "$cid" ]] || continue # 未起動（初回）なら警告不要。full deploy で作られる。
-    running_img="$(docker inspect -f '{{.Image}}' "$cid" 2>/dev/null || true)"
-    current_img="$(docker image inspect -f '{{.Id}}' "${prefix:-idp}/${svc}:${tag:-latest}" 2>/dev/null || true)"
-    status="$(docker inspect -f '{{.State.Status}}' "$cid" 2>/dev/null || true)"
-    if [[ -n "$current_img" && -n "$running_img" && "$running_img" != "$current_img" ]]; then
-      log "⚠ $svc は旧イメージのまま稼働しています（新イメージは load 済み・未反映）。"
-      stale=1
-    elif [[ "$status" == "restarting" || "$status" == "exited" || "$status" == "dead" ]]; then
-      log "⚠ $svc が異常状態です（status=$status）。"
-      stale=1
-    fi
-  done
-  if [[ $stale -eq 1 ]]; then
-    log "→ 新イメージをアプリへ反映するには、引数なしの完全デプロイを実行してください: ./deploy.sh"
-  fi
+  fail "$service が healthy になりませんでした（タイムアウト）。" "$service"
 }
 
 # --- .env -------------------------------------------------------------------------
@@ -208,6 +204,28 @@ ensure_env_file() {
 }
 
 # --- イメージ（tar 読込と確認） ------------------------------------------------------
+# `docker load` は標準では進捗を出さず、大きいイメージだと数分間無反応に見える。pv があれば
+# 進捗バーを、無ければ一定間隔でハートビートを出し「止まって見えるが実行中」を分かるようにする。
+load_image_with_progress() {
+  local tar="$1" size_human pid waited=0
+  size_human="$(du -h "$tar" 2>/dev/null | cut -f1 || true)"
+  log "イメージを読み込みます: $tar (${size_human:-unknown size}) ..."
+  if command -v pv >/dev/null 2>&1; then
+    pv "$tar" | docker load >/dev/null || fail "docker load に失敗しました: $tar"
+    return 0
+  fi
+  docker load -i "$tar" >/dev/null &
+  pid=$!
+  while kill -0 "$pid" 2>/dev/null; do
+    sleep 5
+    waited=$((waited + 5))
+    if kill -0 "$pid" 2>/dev/null; then
+      log "...読み込み中、${waited}s 経過（大きいイメージでは正常です）"
+    fi
+  done
+  wait "$pid" || fail "docker load に失敗しました: $tar"
+}
+
 # dist の tar からイメージを読み込み、api/web/migrate が揃っていることを確認する。
 # manifest.env（build.sh が出力）があれば image ID を照合し、一致すれば読込をスキップする。
 ensure_images() {
@@ -226,8 +244,7 @@ ensure_images() {
     actual_id="$(docker image inspect -f '{{.Id}}' "$ref" 2>/dev/null || true)"
     if [[ -z "$actual_id" || (-n "$expected_id" && "$actual_id" != "$expected_id") ]]; then
       [[ -f "$tar" ]] || die "イメージ $ref がありません（$tar も無し）。build.sh が出力した dist/ を配置してください。"
-      log "イメージを読み込みます: $tar ..."
-      docker load -i "$tar" >/dev/null
+      load_image_with_progress "$tar"
       actual_id="$(docker image inspect -f '{{.Id}}' "$ref" 2>/dev/null || true)"
     fi
     [[ -n "$actual_id" ]] || die "イメージ $ref を解決できません。"
@@ -243,17 +260,48 @@ ensure_images() {
     fi
     log "配置対象 image: service=$svc ref=$ref revision=${revision:-unknown}"
   done
+  DEPLOYED_REVISION="$first_revision"
 }
 
 # --- 各フェーズ ---------------------------------------------------------------------
-run_migrate() {
-  phase_begin "migrate"
+# mariadb を起動して healthy を待つ（reset 以外では既存を落とさず再利用する）。
+ensure_mariadb() {
   log "MariaDB を起動します..."
   $compose up -d mariadb
   wait_healthy mariadb
-  log "マイグレーションを適用します（あれば DB 更新）..."
+}
+
+# DDL・マスタデータを適用する（常駐させない専用ジョブ）。
+run_migrate() {
+  ensure_mariadb
+  log "マイグレーションを適用します（DDL + マスタデータ）..."
   $compose run --rm migrate
-  phase_end
+}
+
+# アプリコンテナを --force-recreate で必ず作り直す。旧イメージのまま restart ループしている
+# コンテナが居座ると、新イメージを load（タグ付け替え）しても `up -d` が「変更なし」と判断して
+# 置き換えないことがあるため。--remove-orphans で名前が変わった旧コンテナも掃除する。
+recreate_app() {
+  local up_out status
+  log "api・web・proxy を作り直します（--force-recreate で新イメージへ確実に置き換え）..."
+  up_out="$(mktemp)"
+  set +e
+  $compose up -d --force-recreate --remove-orphans "${APP_SERVICES[@]}" 2>&1 | tee "$up_out" | mask_secrets >&2
+  status=${PIPESTATUS[0]}
+  set -e
+  if [[ $status -ne 0 ]]; then
+    err "docker compose up が失敗しました。"
+    # バインドマウント失敗等の起動前エラーはコンテナログに残らないため up の出力を再掲する。
+    echo "[idp][diagnostic] 'docker compose up' の出力（コンテナログに残らない起動前エラー対策）:" >&2
+    mask_secrets <"$up_out" >&2
+    rm -f "$up_out"
+    dump_module_logs "${APP_SERVICES[@]}"
+    err "デプロイに失敗しました（mode=${mode:-unknown}）。"
+    exit "$status"
+  fi
+  rm -f "$up_out"
+  wait_healthy api
+  wait_healthy web
 }
 
 root_tenant_id() {
@@ -265,21 +313,9 @@ root_tenant_id() {
     -e 'SELECT id FROM tenants WHERE parent_tenant_id IS NULL' 2>/dev/null || true
 }
 
-run_deploy() {
-  local web_port issuer root login_url ready_url
-  phase_begin "images"
-  ensure_images
-  phase_end
-  run_migrate
-  phase_begin "app"
-  # --force-recreate で必ずコンテナを作り直す。旧イメージのまま restart ループしている
-  # コンテナが居座ると、新イメージを load（タグを付け替え）しても `up -d` が「変更なし」と
-  # 判断してコンテナを置き換えず、古い（壊れた）バイナリが動き続けることがあるため
-  # （mariadb は対象に含めないので DB は落とさない）。
-  log "api・web・proxy を起動します（--force-recreate で旧コンテナを確実に置き換え）..."
-  $compose up -d --force-recreate api web proxy
-  wait_healthy api
-  wait_healthy web
+# readiness（proxy 経由 /readyz）を確認し、ログイン URL を案内する。
+verify_ready() {
+  local web_port issuer ready_url root login_url cid
   web_port="$(get_env_var WEB_PORT)"
   web_port="${web_port:-8080}"
   issuer="$(get_env_var ISSUER)"
@@ -290,38 +326,60 @@ run_deploy() {
     if curl -fsS "$ready_url" >/dev/null 2>&1; then
       root="$(root_tenant_id)"
       login_url="${issuer%/}/${root:-<root-tenant-id>}/login"
-      log "readyz OK。デプロイが完了しました。"
+      log "readyz OK。"
       log "ログイン URL: $login_url"
-      phase_end
       return 0
     fi
     sleep 2
   done
-  compose_diagnostics
-  die "readyz が OK になりませんでした。"
+  err "readyz が OK になりませんでした: $ready_url"
+  dump_module_logs "${APP_SERVICES[@]}"
+  cid="$($compose ps -q web 2>/dev/null || true)"
+  if [[ -n "$cid" ]]; then
+    echo "[idp][diagnostic] web healthcheck 履歴:" >&2
+    docker inspect --format '{{json .State.Health}}' "$cid" 2>/dev/null | mask_secrets >&2 || true
+  fi
+  err "デプロイに失敗しました（mode=${mode:-unknown}）。"
+  exit 1
 }
 
 # --- 実行 --------------------------------------------------------------------------
-phase_begin "env"
+log "デプロイ開始（mode=$mode, base=$base）"
+
+# Docker daemon 到達性の事前確認（権限不足・daemon 停止を早期に分かりやすく落とす）。
+if ! docker info >/dev/null 2>&1; then
+  err "Docker daemon に到達できません（権限不足、または daemon 停止）。"
+  err "  sudo で実行するか、ユーザーを docker グループに追加して再ログインしてください。"
+  exit 1
+fi
+
 ensure_env_file
-phase_end
+ensure_images
 
 case "$mode" in
-  deploy)
-    run_deploy
+  app)
+    # アプリのみ更新（DDL 変更なし）。DB は起動確認だけして落とさない。
+    ensure_mariadb
+    recreate_app
+    verify_ready
     ;;
   migrate)
-    phase_begin "images"
-    ensure_images
-    phase_end
+    # DDL 更新時。migrate（DDL・マスタデータ）を適用してから app を作り直す。
     run_migrate
-    warn_stale_app_containers
+    recreate_app
+    verify_ready
     ;;
   reset)
-    phase_begin "reset"
+    # 完全初期化（破壊的）。DB volume を削除してから migrate・app をやり直す。.env は保持する。
     log "DB volume を削除します（.env は保持します）。"
     $compose down -v --remove-orphans
-    phase_end
-    run_deploy
+    run_migrate
+    recreate_app
+    verify_ready
     ;;
 esac
+
+log "未使用の Docker イメージを掃除します..."
+docker image prune -f >/dev/null 2>&1 || true
+
+log "デプロイが完了しました（mode=$mode, revision=${DEPLOYED_REVISION:-unknown}）。"

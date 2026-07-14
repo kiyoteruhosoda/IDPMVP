@@ -16,7 +16,7 @@
 | スクリプト | 用途 |
 |---|---|
 | `build.sh` | **ビルド側**: Docker イメージ（api/web/migrate）をビルドし、tar ＋ デプロイ一式を `dist/` へ出力 |
-| `deploy.sh` | **デプロイ先**: デプロイの単一入口（初回・更新・migrate・reset）。`dist/` に同梱される |
+| `deploy.sh` | **デプロイ先**: デプロイの単一入口（`app`／`migrate`／`reset` の 3 モード）。`dist/` に同梱される |
 | `e2e.sh` | web→api の疎通 E2E（api・web を実プロセス起動して HTTP で検証） |
 | `test_deploy.sh` | `deploy.sh` の CLI/エラー処理をスタブ docker で検証（CI 用） |
 
@@ -42,12 +42,16 @@ dist/
 
 ## deploy.sh — デプロイ（デプロイ先・単一入口）
 
+モードは必須。どのモードでも新イメージを load し、アプリコンテナ（api・web・proxy）を
+`--force-recreate` で必ず作り直す（DB は `reset` を除き落とさない）。
+
 ```bash
-./deploy.sh          # デプロイ（初回は .env 自動生成 → イメージ読込 → migrate → 起動 → readiness 確認）
-./deploy.sh migrate  # DB 起動と migrate（あれば DB 更新）のみ
-./deploy.sh reset    # DB を初期化（volume 削除）してからデプロイし直す（破壊的操作）
+./deploy.sh app      # アプリのみ更新（DDL 変更なし）: イメージ load → app 作り直し → readiness
+./deploy.sh migrate  # DDL 更新時: migrate（DDL・マスタデータ）適用 + app 作り直し
+./deploy.sh reset    # 完全初期化（DB volume 削除。破壊的・確認なし）→ migrate → app 作り直し
 ```
 
+- **初回は DDL 適用が要るため `migrate`（または `reset`）を使う**。以降のアプリ更新は `app`。
 - 初回実行時に `.env` を `.env.example` から自動生成し、秘密情報（DB パスワード・
   `KEY_ENCRYPTION_KEY`・`INTERNAL_SERVICE_TOKEN`・`CSRF_SECRET`）を乱数生成する。
   **既存の `.env` は上書きしない**（冪等）。環境に合わせて確認する項目は `ISSUER`（公開 URL）と
@@ -68,11 +72,13 @@ scp -r dist/ deploy-host:/opt/idp/            # 転送（例）
 
 # === デプロイ先（別ホスト。ソース不要） ===
 cd /opt/idp/dist
-./deploy.sh          # 初回も更新もこれだけ
+./deploy.sh migrate  # 初回・DDL 更新
+./deploy.sh app      # 以降のアプリ更新（DDL 変更なし）
 ```
 
-更新は新しい `dist/` を上書き転送して `./deploy.sh` を再実行する。ロールバックは前のバージョンの
-`dist/` を残しておき、そこで `./deploy.sh` を実行する。
+更新は新しい `dist/` を上書き転送し、DDL 変更があれば `./deploy.sh migrate`、無ければ
+`./deploy.sh app` を実行する。ロールバックは前のバージョンの `dist/` を残しておき、そこで
+`./deploy.sh app`（DDL を戻す必要がある場合は `migrate`）を実行する。
 
 ## e2e.sh — 疎通 E2E
 

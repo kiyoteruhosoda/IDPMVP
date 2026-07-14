@@ -2,13 +2,17 @@
 
 完了した重要な変更の要約（詳しい経緯は `history/`、設計判断は `adr/`）。
 
-## 2026-07-14（起動しない api コンテナの修正 — スタブ出荷＋旧コンテナ居座り）
+## 2026-07-14（deploy.sh 全面刷新 — 全モードでアプリコンテナを作り直す）
 
-- **deploy.sh — `migrate` モードで旧アプリコンテナの居座りを警告**: `./deploy.sh migrate` は
-  `ensure_images` で新イメージを load するがアプリコンテナ（api/web）は置き換えないため、旧イメージのまま
-  restart ループしているコンテナが居座ると「新イメージは来ているのに未反映」の半端な状態になる。migrate
-  完了後に、稼働中イメージが現行タグと異なる／`restarting`・`exited`・`dead` のアプリコンテナを検知し、
-  反映には引数なしの完全デプロイ（`./deploy.sh`）が必要な旨を明示するようにした（migrate の挙動は不変）。
+- **deploy.sh — CLI を `app | migrate | reset` の 3 モード必須に刷新し、全モードでアプリを作り直す**:
+  引数なしの既定デプロイを廃し、モード指定を必須にした。`app`（DDL 変更なしのアプリ更新）／`migrate`
+  （DDL・マスタデータ適用＋アプリ更新）／`reset`（DB volume 削除→再構築）のいずれでも、新イメージを
+  load したうえで `up -d --force-recreate --remove-orphans api web proxy` を実行し、アプリコンテナを
+  必ず作り直す（旧イメージのまま restart ループするコンテナの居座りを解消。`migrate` も旧来と違い
+  アプリを反映する）。あわせて堅牢化: Docker daemon 事前確認、イメージ load の進捗表示（`pv`／ハートビート）、
+  `wait_healthy` が `restarting`/`exited`/`dead` を即失敗として crash-loop を早期検知、失敗時に該当
+  モジュールのログ末尾を秘密マスク付きで出力、`up` 前段エラー（バインドマウント失敗等）の出力再掲、
+  未使用イメージの掃除、デプロイ revision の表示。DB（mariadb）は `reset` を除き落とさない。
 
 - **deploy.sh — アプリコンテナを `--force-recreate` で確実に置き換え**: 新イメージを load
   （タグ付け替え）しても、旧イメージのまま restart ループしているコンテナが居座ると `up -d` が
