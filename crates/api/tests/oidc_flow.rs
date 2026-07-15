@@ -10,11 +10,13 @@ mod support;
 use axum::body::Body;
 use axum::http::header::{AUTHORIZATION, CONTENT_TYPE, COOKIE};
 use axum::http::{Request, StatusCode};
+use base64::Engine as _;
+use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use serde_json::{json, Value};
 use sqlx::{MySqlPool, Row};
 use support::{
     body_json, cookie_value, location, query_param, send, CODE_CHALLENGE, CODE_VERIFIER,
-    REDIRECT_URI, SERVICE_TOKEN, SERVICE_TOKEN_HEADER,
+    REDIRECT_URI, REDIRECT_URI_ENC, SERVICE_TOKEN, SERVICE_TOKEN_HEADER,
 };
 
 /// 一意な public client（openid/profile/email）を登録して client_id を返す。
@@ -52,9 +54,26 @@ async fn register_user(app: &axum::Router, tenant: &str, username: &str, passwor
 }
 
 fn authorize_uri(tenant: &str, client_id: &str, state: &str, nonce: &str) -> String {
+    authorize_uri_with_scope(tenant, client_id, "openid profile email", state, nonce)
+}
+
+fn authorize_uri_with_scope(
+    tenant: &str,
+    client_id: &str,
+    scope: &str,
+    state: &str,
+    nonce: &str,
+) -> String {
     format!(
-        "/{tenant}/authorize?response_type=code&client_id={client_id}&redirect_uri={}&scope=openid%20profile%20email&state={state}&nonce={nonce}&code_challenge={CODE_CHALLENGE}&code_challenge_method=S256",
-        "http%3A%2F%2Flocalhost%3A3000%2Fcallback"
+        "/{tenant}/authorize?response_type=code&client_id={client_id}&redirect_uri={REDIRECT_URI_ENC}&scope={}&state={state}&nonce={nonce}&code_challenge={CODE_CHALLENGE}&code_challenge_method=S256",
+        utf8_percent_encode(scope, NON_ALPHANUMERIC)
+    )
+}
+
+fn basic_auth(client_id: &str, secret: &str) -> String {
+    format!(
+        "Basic {}",
+        base64::engine::general_purpose::STANDARD.encode(format!("{client_id}:{secret}"))
     )
 }
 
@@ -418,6 +437,218 @@ async fn full_authorization_code_flow_with_sso_and_audit() {
 }
 
 #[tokio::test]
+async fn refresh_token_rotation_introspection_and_revocation_e2e() {
+    let Some(env) = support::setup("OIDC refresh/revoke/introspect flow").await else {
+        return;
+    };
+    let support::TestEnv {
+        app,
+        pool,
+        root_tenant_id,
+        ..
+    } = env;
+
+    let (client_id, secret) =
+        support::insert_confidential_client(&pool, &root_tenant_id, &["openid", "offline_access"])
+            .await;
+    let username = format!("e2ert{}", &uuid::Uuid::new_v4().simple().to_string()[..10]);
+    let password = "correct-horse-battery";
+    register_user(&app, &root_tenant_id, &username, password).await;
+    support::mark_email_verified(&pool, &root_tenant_id, &username).await;
+
+    let response = send(
+        &app,
+        Request::builder()
+            .uri(authorize_uri_with_scope(
+                &root_tenant_id,
+                &client_id,
+                "openid offline_access",
+                "state-refresh",
+                "nonce-refresh",
+            ))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::FOUND, "redirect to /login");
+    let auth_session = cookie_value(&response, "auth_session_id").expect("auth_session_id cookie");
+    let csrf = login_csrf(&auth_session, &env.csrf_secret);
+
+    let (status, body) = internal_authenticate(
+        &app,
+        &root_tenant_id,
+        &auth_session,
+        &username,
+        password,
+        &csrf,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "login with offline_access scope");
+
+    let callback = if body["result"] == "consent_required" {
+        let consent_session = body["auth_session_id"].as_str().expect("auth_session_id");
+        let response = send(
+            &app,
+            Request::builder()
+                .method("POST")
+                .uri("/internal/consent/approve")
+                .header(CONTENT_TYPE, "application/json")
+                .header(SERVICE_TOKEN_HEADER, SERVICE_TOKEN)
+                .body(Body::from(
+                    json!({ "tenant_id": root_tenant_id, "auth_session_id": consent_session })
+                        .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK, "consent approve");
+        body_json(response).await["redirect_to"]
+            .as_str()
+            .expect("redirect_to")
+            .to_string()
+    } else {
+        assert_eq!(body["result"], "success", "login result");
+        body["redirect_to"]
+            .as_str()
+            .expect("redirect_to")
+            .to_string()
+    };
+    let code = query_param(&callback, "code").expect("authorization code");
+
+    let response = send(
+        &app,
+        Request::builder()
+            .method("POST")
+            .uri(format!("/{root_tenant_id}/token"))
+            .header(CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .header(AUTHORIZATION, basic_auth(&client_id, &secret))
+            .body(Body::from(format!(
+                "grant_type=authorization_code&code={code}&redirect_uri={REDIRECT_URI_ENC}&code_verifier={CODE_VERIFIER}"
+            )))
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "token with offline_access"
+    );
+    let tokens = body_json(response).await;
+    let access_token = tokens["access_token"]
+        .as_str()
+        .expect("access_token")
+        .to_string();
+    let refresh_token = tokens["refresh_token"]
+        .as_str()
+        .expect("refresh_token")
+        .to_string();
+    assert_eq!(tokens["scope"], "openid offline_access");
+
+    let response = send(
+        &app,
+        Request::builder()
+            .method("POST")
+            .uri(format!("/{root_tenant_id}/introspect"))
+            .header(CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .header(AUTHORIZATION, basic_auth(&client_id, &secret))
+            .body(Body::from(format!(
+                "token={}&token_type_hint=access_token",
+                utf8_percent_encode(&access_token, NON_ALPHANUMERIC)
+            )))
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK, "introspect access token");
+    let body = body_json(response).await;
+    assert_eq!(body["active"], true);
+    assert_eq!(body["client_id"], client_id);
+    assert_eq!(body["token_type"], "Bearer");
+
+    let response = send(
+        &app,
+        Request::builder()
+            .method("POST")
+            .uri(format!("/{root_tenant_id}/token"))
+            .header(CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .header(AUTHORIZATION, basic_auth(&client_id, &secret))
+            .body(Body::from(format!(
+                "grant_type=refresh_token&refresh_token={}",
+                utf8_percent_encode(&refresh_token, NON_ALPHANUMERIC)
+            )))
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK, "refresh token rotation");
+    let rotated = body_json(response).await;
+    let rotated_refresh = rotated["refresh_token"]
+        .as_str()
+        .expect("rotated refresh token");
+    assert_ne!(rotated_refresh, refresh_token);
+
+    let response = send(
+        &app,
+        Request::builder()
+            .method("POST")
+            .uri(format!("/{root_tenant_id}/token"))
+            .header(CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .header(AUTHORIZATION, basic_auth(&client_id, &secret))
+            .body(Body::from(format!(
+                "grant_type=refresh_token&refresh_token={}",
+                utf8_percent_encode(&refresh_token, NON_ALPHANUMERIC)
+            )))
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(
+        response.status(),
+        StatusCode::BAD_REQUEST,
+        "refresh token reuse"
+    );
+    assert_eq!(body_json(response).await["error"], "invalid_grant");
+
+    let response = send(
+        &app,
+        Request::builder()
+            .method("POST")
+            .uri(format!("/{root_tenant_id}/revoke"))
+            .header(CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .header(AUTHORIZATION, basic_auth(&client_id, &secret))
+            .body(Body::from(format!(
+                "token={}&token_type_hint=access_token",
+                utf8_percent_encode(&access_token, NON_ALPHANUMERIC)
+            )))
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK, "revoke access token");
+
+    let response = send(
+        &app,
+        Request::builder()
+            .method("POST")
+            .uri(format!("/{root_tenant_id}/introspect"))
+            .header(CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .header(AUTHORIZATION, basic_auth(&client_id, &secret))
+            .body(Body::from(format!(
+                "token={}&token_type_hint=access_token",
+                utf8_percent_encode(&access_token, NON_ALPHANUMERIC)
+            )))
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "introspect revoked access token"
+    );
+    assert_eq!(body_json(response).await["active"], false);
+
+    assert!(audit_count(&pool, &client_id, "refresh_token.issued").await >= 2);
+    assert!(audit_count(&pool, &client_id, "refresh_token.used").await >= 1);
+    assert!(audit_count(&pool, &client_id, "refresh_token.reuse_detected").await >= 1);
+}
+
+#[tokio::test]
 async fn invalid_authorize_and_client_auth_failures() {
     let Some(env) = support::setup("OIDC flow").await else {
         return;
@@ -475,7 +706,6 @@ async fn invalid_authorize_and_client_auth_failures() {
     assert_eq!(query_param(&callback, "state").as_deref(), Some("s"));
 
     // 条件 13: confidential client の認証失敗（Basic の secret 不一致 → 401 + 監査ログ）。
-    use base64::Engine as _;
     let bad_basic =
         base64::engine::general_purpose::STANDARD.encode(format!("{conf_client_id}:wrong-secret"));
     let response = send(
