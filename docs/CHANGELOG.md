@@ -1,3 +1,19 @@
+## 2026-07-15（proxy readiness の異常検知強化）
+
+- **docker-compose*.yml — nginx proxy に SETGID/SETUID と healthcheck を追加**: Synology NAS 等で
+  `cap_drop: ALL` のまま nginx worker が `setgid(101)` / `setuid(101)` できず、proxy master だけが
+  Up に見える状態を避けるため、必要 capability を明示的に戻し、`/readyz` healthcheck で検知する。
+- **deploy.sh — proxy の healthy 待機を追加**: api / web の起動後、外部 `readyz` 確認前に proxy 自身の
+  healthcheck を待つことで、proxy 起動不良時はタイムアウト後に compose diagnostics / logs を出力する。
+
+## 2026-07-15（Compose project 名の明示化）
+
+- **deploy.sh — `COMPOSE_PROJECT_NAME` を .env から明示適用**: 新規 `.env` では Docker Compose の
+  container / network / volume 名が `stg-api-1` のような汎用名にならないよう `idp-<ディレクトリ名>` を使う。
+  一方、既存 `.env` に未設定の場合は既存 volume を保護するため従来のディレクトリ名 project を維持する。
+- **env サンプル — stg/prod の project 名を分離**: `.env.staging.example` は `COMPOSE_PROJECT_NAME=idp-stg`、
+  `.env.production.example` は `COMPOSE_PROJECT_NAME=idp-prod` を持つ。
+
 ## 2026-07-15（proxy 起動権限と deploy ログ保存）
 
 - **docker-compose.deploy.yml / docker-compose.yml — nginx proxy の chown 権限を最小追加**: `read_only` + `tmpfs` +
