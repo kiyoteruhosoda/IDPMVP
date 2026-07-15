@@ -1,11 +1,11 @@
 {% extends "console/layout.html" %}
 {% block content %}
-<h2>{{ messages.get("admin-settings-title") }}</h2>
+<section class="settings-hero"><p class="eyebrow">{{ messages.get("admin-nav-settings") }}</p><h1>{{ messages.get("admin-settings-title") }}</h1><p>{{ messages.get("admin-settings-lead") }}</p></section>
 
 {% if saved %}<p class="notice" role="status">{{ messages.get("admin-settings-saved") }}</p>{% endif %}
 {% if let Some(key) = error_key %}<p class="error" role="alert">{{ messages.get(key) }}</p>{% endif %}
 
-<section class="admin-settings-tenant">
+<div class="settings-layout"><nav class="settings-nav" aria-label="{{ messages.get("admin-settings-nav-label") }}"><a href="#tenant-settings">{{ messages.get("admin-settings-tenant-heading") }}</a>{% if let Some(_) = system %}<a href="#system-settings">{{ messages.get("admin-settings-system-heading") }}</a><a href="#runtime-settings">{{ messages.get("admin-settings-runtime-heading") }}</a>{% endif %}</nav><div class="settings-panels"><section id="tenant-settings" class="settings-card admin-settings-tenant">
 <h3>{{ messages.get("admin-settings-tenant-heading") }}</h3>
 <p>{{ messages.get("admin-settings-tenant-id") }}: <code>{{ tenant_id }}</code></p>
 <p>{{ messages.get("admin-settings-tenant-status") }}: {{ tenant_status }}</p>
@@ -20,7 +20,7 @@
 </section>
 
 {% if let Some(sys) = system %}
-<section class="admin-settings-system">
+<section id="system-settings" class="settings-card admin-settings-system">
 <h3>{{ messages.get("admin-settings-system-heading") }}</h3>
 <p>{{ messages.get("admin-settings-system-note") }}</p>
 <form method="post" action="{{ tenant }}/admin/system-settings">
@@ -45,8 +45,10 @@
 <button type="submit">{{ messages.get("admin-settings-save") }}</button>
 </form>
 
-<h4>ランタイム設定の出所</h4>
-<p class="hint">値は表示せず、設定キーごとの管理区分・現在の出所・状態・理由・再起動要否を表示します。secret の値や fingerprint は表示しません。</p>
+</section>
+<section id="runtime-settings" class="settings-card admin-settings-runtime">
+<h3>{{ messages.get("admin-settings-runtime-heading") }}</h3>
+<p class="hint">{{ messages.get("admin-settings-runtime-note") }}</p>
 <table>
 <thead><tr><th>設定名</th><th>現在の出所</th><th>状態</th><th>理由</th><th>再起動</th><th>秘密値</th></tr></thead>
 <tbody>
@@ -64,6 +66,7 @@
 </table>
 </section>
 {% endif %}
+</div></div>
 
 <p><a href="{{ tenant }}/admin">{{ messages.get("admin-settings-back") }}</a></p>
 {% endblock %}
