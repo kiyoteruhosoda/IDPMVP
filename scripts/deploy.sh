@@ -304,6 +304,17 @@ root_tenant_id() {
     -e 'SELECT id FROM tenants WHERE parent_tenant_id IS NULL' 2>/dev/null || true
 }
 
+sync_root_tenant_id_env() {
+  local root
+  root="$(root_tenant_id)"
+  if [[ -n "$root" ]]; then
+    set_env_var ROOT_TENANT_ID "$root"
+    log "ROOT_TENANT_ID を .env に反映しました: $root"
+  else
+    warn "root テナント UUID を取得できませんでした。/ はログイン画面へ誘導できません。"
+  fi
+}
+
 start_database() {
   log "MariaDB を起動します..."
   "${compose[@]}" up -d mariadb
@@ -313,11 +324,12 @@ start_database() {
 replace_app_containers() {
   local web_port issuer ready_url root login_url
   log "api・web・proxy を起動します（--force-recreate で全モード必ずアプリコンテナを入れ替え）..."
+  sync_root_tenant_id_env
   "${compose[@]}" up -d --force-recreate --remove-orphans "${APP_SERVICES[@]}"
   wait_healthy api
   wait_healthy web
   wait_healthy proxy
-  web_port="$(get_env_var WEB_PORT)"; web_port="${web_port:-8080}"
+  web_port="$(get_env_var WEB_PORT)"; web_port="${web_port:-8060}"
   issuer="$(get_env_var ISSUER)"; issuer="${issuer:-http://localhost:${web_port}}"
   ready_url="http://127.0.0.1:${web_port}/readyz"
   log "readiness を確認します: $ready_url"

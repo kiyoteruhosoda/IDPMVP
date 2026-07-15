@@ -13,6 +13,7 @@ use crate::handlers::{
 use crate::security_headers::add_security_headers;
 use crate::state::WebState;
 use crate::tenant::capture_tenant;
+use axum::response::{IntoResponse, Redirect};
 use axum::routing::{get, post};
 use axum::Router;
 use tower_http::trace::TraceLayer;
@@ -165,6 +166,13 @@ pub fn build(state: WebState) -> Router {
         .route_layer(axum::middleware::from_fn(capture_tenant));
 
     Router::new()
+        .route(
+            "/",
+            get({
+                let root_tenant_id = state.config.root_tenant_id().map(str::to_owned);
+                move || root_entrypoint(root_tenant_id.clone())
+            }),
+        )
         .route("/healthz", get(health::liveness))
         .route("/readyz", get(health::readiness))
         .nest("/{tenant_id}", tenant_scoped)
@@ -174,4 +182,13 @@ pub fn build(state: WebState) -> Router {
             add_security_headers(req, next, hsts_max_age)
         }))
         .with_state(state)
+}
+
+async fn root_entrypoint(root_tenant_id: Option<String>) -> impl IntoResponse {
+    match root_tenant_id {
+        Some(id) if uuid::Uuid::parse_str(&id).is_ok() => {
+            Redirect::temporary(&format!("/{id}/admin/login")).into_response()
+        }
+        _ => axum::http::StatusCode::NOT_FOUND.into_response(),
+    }
 }
