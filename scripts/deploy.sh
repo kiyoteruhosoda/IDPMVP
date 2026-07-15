@@ -31,6 +31,23 @@ fi
 cd "$base"
 [[ -f "$base/$compose_file" ]] || die "$compose_file がありません（デプロイ用 Compose）。"
 
+timestamp_millis() {
+  local ts
+  ts="$(date +%Y%m%d%H%M%S%3N 2>/dev/null || true)"
+  if [[ "$ts" =~ ^[0-9]{17}$ ]]; then
+    printf '%s\n' "$ts"
+  else
+    printf '%s000\n' "$(date +%Y%m%d%H%M%S)"
+  fi
+}
+
+if [[ -z "${DEPLOY_LOG_ACTIVE:-}" ]]; then
+  deploy_log_file="$base/deploy-$(timestamp_millis).log"
+  export DEPLOY_LOG_ACTIVE=1
+  exec > >(tee -a "$deploy_log_file") 2>&1
+  log "ログファイル: $deploy_log_file"
+fi
+
 env_file="$base/.env"
 example_file="$base/.env.example"
 

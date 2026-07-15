@@ -1,3 +1,12 @@
+## 2026-07-15（proxy 起動権限と deploy ログ保存）
+
+- **docker-compose.deploy.yml / docker-compose.yml — nginx proxy の chown 権限を最小追加**: `read_only` + `tmpfs` +
+  `cap_drop: ALL` の組み合わせで nginx 起動時の `chown("/var/cache/nginx/client_temp", 101)` が
+  `Operation not permitted` になり、proxy が restart して `/readyz` が通らない問題を修正。proxy のみに `CAP_CHOWN` を
+  戻し、他 capability は drop したままにする。
+- **deploy.sh — 実行ログの日時ミリ秒付き自動保存**: `./deploy.sh ...` の標準出力・標準エラーをコンソールへ出しつつ、
+  実行ディレクトリへ `deploy-YYYYMMDDHHmmssmmm.log` として自動保存する。
+
 ## 2026-07-15（migrate tar の軽量化）
 
 - **deploy.sh — migrate 失敗時に Docker 診断ログを即時出力**: `docker compose run --rm migrate` が失敗した各 retry で、
