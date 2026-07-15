@@ -78,6 +78,10 @@ if ./scripts/deploy.sh unknown >/tmp/deploy-unknown.out 2>&1; then
 fi
 ./scripts/deploy.sh migrate >/tmp/deploy-migrate.out 2>&1
 [[ -f .env ]] || { echo ".env was not generated" >&2; exit 1; }
+shopt -s nullglob
+deploy_logs=(deploy-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].log)
+[[ ${#deploy_logs[@]} -ge 1 ]] || { echo "timestamped deploy log was not generated" >&2; exit 1; }
+grep -q 'ログファイル:' "${deploy_logs[0]}"
 grep -q '^CSRF_SECRET=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=$' .env
 before="$(grep '^MARIADB_PASSWORD=' .env)"
 : >"$DOCKER_STUB_LOG"
