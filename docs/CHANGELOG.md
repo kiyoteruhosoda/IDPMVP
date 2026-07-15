@@ -1,3 +1,11 @@
+## 2026-07-15（Compose project 名の明示化）
+
+- **deploy.sh — `COMPOSE_PROJECT_NAME` を .env から明示適用**: デプロイ先ディレクトリ名が `stg` / `prod` の場合でも、
+  Docker Compose の container / network / volume 名が `stg-api-1` のような汎用名にならないよう、
+  既存 `.env` に未設定なら `idp-<ディレクトリ名>` を追記し、Compose 実行時に `--project-name` として渡す。
+- **env サンプル — stg/prod の project 名を分離**: `.env.staging.example` は `COMPOSE_PROJECT_NAME=idp-stg`、
+  `.env.production.example` は `COMPOSE_PROJECT_NAME=idp-prod` を持つ。
+
 ## 2026-07-15（proxy 起動権限と deploy ログ保存）
 
 - **docker-compose.deploy.yml / docker-compose.yml — nginx proxy の chown 権限を最小追加**: `read_only` + `tmpfs` +

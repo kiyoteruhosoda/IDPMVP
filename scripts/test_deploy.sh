@@ -36,7 +36,7 @@ printf 'docker %s\n' "$*" >>"$log"
 if [[ "${1:-}" == "compose" ]]; then
   shift
   if [[ "${1:-}" == "version" ]]; then exit 0; fi
-  while [[ "${1:-}" == "-f" ]]; do shift 2; done
+  while [[ "${1:-}" == "-f" || "${1:-}" == "--project-name" ]]; do shift 2; done
   case "${1:-}" in
     up) if [[ "${DOCKER_STUB_FAIL_UP:-0}" == "1" ]]; then echo "up failed with ${MARIADB_PASSWORD:-secret}" >&2; exit 42; fi; exit 0 ;;
     run)
@@ -89,7 +89,7 @@ before="$(grep '^MARIADB_PASSWORD=' .env)"
 after="$(grep '^MARIADB_PASSWORD=' .env)"
 [[ "$before" == "$after" ]] || { echo "existing .env was overwritten" >&2; exit 1; }
 grep -q 'ログイン URL:' /tmp/deploy-app.out
-grep -q '\-f docker-compose.deploy.yml' "$DOCKER_STUB_LOG"
+grep -q -- '--project-name idp-repo -f docker-compose.deploy.yml' "$DOCKER_STUB_LOG"
 grep -q 'run --rm migrate' "$DOCKER_STUB_LOG"
 
 set +e
@@ -134,7 +134,7 @@ cd "$TMP/bundle"
 : >"$DOCKER_STUB_LOG"
 ./deploy.sh app >/tmp/deploy-bundle.out 2>&1
 grep -q 'ログイン URL:' /tmp/deploy-bundle.out
-grep -q '\-f docker-compose.yml' "$DOCKER_STUB_LOG"
+grep -q -- '--project-name idp-bundle -f docker-compose.yml' "$DOCKER_STUB_LOG"
 
 # manifest と image ID が食い違う場合は tar を読み込み、なお不一致なら失敗する。
 sed -i 's/^api_image_id=.*/api_image_id=sha256:expected-other-id/' manifest.env

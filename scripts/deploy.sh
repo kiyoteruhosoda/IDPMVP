@@ -60,14 +60,6 @@ esac
 [[ $# -eq 1 ]] || { usage; exit 2; }
 
 command -v docker >/dev/null 2>&1 || die "docker が見つかりません。"
-if docker compose version >/dev/null 2>&1; then
-  compose=(docker compose -f "$compose_file")
-elif command -v docker-compose >/dev/null 2>&1; then
-  compose=(docker-compose -f "$compose_file")
-else
-  die "docker compose（v2）または docker-compose（v1）が見つかりません。"
-fi
-
 if ! docker info >/dev/null 2>&1; then
   die "Docker daemon に接続できません（daemon 停止または権限不足）。docker info が成功する状態で再実行してください。"
 fi
@@ -75,6 +67,7 @@ fi
 CURRENT_PHASE="startup"
 PHASE_STARTED_AT=0
 APP_SERVICES=(api web proxy)
+compose=()
 DIAGNOSTIC_SERVICES=(mariadb migrate api web proxy)
 
 get_env_var() {
@@ -110,6 +103,10 @@ diagnostic_service_block() {
 
 compose_diagnostics_for() {
   local service
+  if [[ ${#compose[@]} -eq 0 ]]; then
+    echo "[idp][diagnostic] compose command=not-initialized" >&2
+    return 0
+  fi
   {
     echo "[idp][diagnostic] phase=${CURRENT_PHASE:-unknown}"
     echo "[idp][diagnostic] compose ps"
@@ -133,6 +130,29 @@ on_deploy_error() {
 }
 trap 'on_deploy_error $? $LINENO "$BASH_COMMAND"' ERR
 
+default_compose_project_name() {
+  local dir
+  dir="$(basename "$base")"
+  case "$dir" in
+    idp|idp-*) printf '%s\n' "$dir" ;;
+    *) printf 'idp-%s\n' "$dir" ;;
+  esac
+}
+
+init_compose_command() {
+  local project_name
+  project_name="$(get_env_var COMPOSE_PROJECT_NAME)"
+  project_name="${project_name:-$(default_compose_project_name)}"
+  if docker compose version >/dev/null 2>&1; then
+    compose=(docker compose --project-name "$project_name" -f "$compose_file")
+  elif command -v docker-compose >/dev/null 2>&1; then
+    compose=(docker-compose --project-name "$project_name" -f "$compose_file")
+  else
+    die "docker compose（v2）または docker-compose（v1）が見つかりません。"
+  fi
+  log "Compose project name: $project_name"
+}
+
 set_env_var() {
   local key="$1" value="$2" tmp replaced=0 line
   tmp="$(mktemp)"
@@ -145,7 +165,14 @@ set_env_var() {
 }
 
 ensure_env_file() {
-  if [[ -f "$env_file" ]]; then log "既存の .env を使用します（上書きしません）。"; return 0; fi
+  if [[ -f "$env_file" ]]; then
+    log "既存の .env を使用します（上書きしません）。"
+    if [[ -z "$(get_env_var COMPOSE_PROJECT_NAME)" ]]; then
+      set_env_var COMPOSE_PROJECT_NAME "$(default_compose_project_name)"
+      log "COMPOSE_PROJECT_NAME を .env に追記しました（既存値なし）。"
+    fi
+    return 0
+  fi
   [[ -f "$example_file" ]] || die ".env.example が見つかりません。"
   command -v openssl >/dev/null 2>&1 || die "openssl が見つかりません。"
   log ".env を新規生成します（秘密情報を乱数生成）。"
@@ -159,6 +186,7 @@ ensure_env_file() {
   set_env_var CSRF_SECRET "$(openssl rand -base64 32)"
   set_env_var DATABASE_URL "mysql://idp:${db_password}@127.0.0.1:3306/idp"
   set_env_var TEST_DATABASE_URL "mysql://idp:${db_password}@127.0.0.1:3306/idp"
+  set_env_var COMPOSE_PROJECT_NAME "$(default_compose_project_name)"
   chmod 600 "$env_file"
   log ".env を生成しました（パーミッション 600）。"
 }
@@ -301,6 +329,7 @@ replace_app_containers() {
 }
 
 phase_begin "env"; ensure_env_file; phase_end
+init_compose_command
 phase_begin "images"; ensure_images; phase_end
 
 case "$mode" in
