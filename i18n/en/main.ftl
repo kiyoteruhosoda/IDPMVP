@@ -413,3 +413,4 @@ password-visibility-hide = Hide password
 
 # Profile navigation.
 admin-profile-settings = Open profile settings
+admin-saml-error-conflict = A SAML federation with the same Entity ID already exists.

@@ -413,3 +413,4 @@ password-visibility-hide = パスワードを隠す
 
 # プロフィール導線。
 admin-profile-settings = プロフィール設定を開く
+admin-saml-error-conflict = 同じ Entity ID の SAML 連携が既に登録されています。

@@ -12,8 +12,8 @@ use crate::admin_dto::{
     InvitationCreatedView, MemberView, UserCreatedView,
 };
 use idp_contracts::admin::{
-    AvailablePermissionsResponse, ClientStatusResponse, UserPermissionsResponse,
-    UserSummaryResponse, WhoamiResponse,
+    AvailablePermissionsResponse, ClientStatusResponse, SamlProviderRegisterRequest,
+    SamlProviderResponse, UserPermissionsResponse, UserSummaryResponse, WhoamiResponse,
 };
 use idp_contracts::auth::{
     InternalAdminAuthenticateRequest, InternalAdminAuthenticateResponse,
@@ -746,6 +746,25 @@ impl ApiClient {
             correlation_id,
             sso,
             None,
+        )
+        .await
+    }
+
+    /// SAML 外部 IdP 登録（`POST /admin/saml-providers`）。
+    pub async fn register_saml_provider(
+        &self,
+        correlation_id: &str,
+        tenant_id: &str,
+        sso: &str,
+        body: SamlProviderRegisterRequest,
+    ) -> Result<SamlProviderResponse, AdminApiError> {
+        self.admin_send(
+            Method::POST,
+            tenant_id,
+            "/admin/saml-providers",
+            correlation_id,
+            sso,
+            Some(serde_json::to_value(body).map_err(|e| AdminApiError::Transport(e.to_string()))?),
         )
         .await
     }
