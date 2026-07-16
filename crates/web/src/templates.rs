@@ -14,6 +14,11 @@ use idp_contracts::admin::{ClientStatusResponse, UserSummaryResponse};
 use idp_contracts::auth::PasskeyCredentialInfo;
 use idp_contracts::version::VersionInfo;
 
+/// フッタなどの共通 UI に表示する Cargo パッケージバージョン。
+pub fn app_version() -> &'static str {
+    env!("CARGO_PKG_VERSION")
+}
+
 /// テンプレートを描画して HTML 文字列を返す。描画エラー（実質 fmt エラーのみ）は握りつぶさず
 /// ログに残し、最小限のエラーページへフォールバックする（フェイルソフト）。
 pub fn render<T: Template>(template: &T) -> String {

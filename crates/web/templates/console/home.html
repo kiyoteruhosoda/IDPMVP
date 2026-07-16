@@ -1,16 +1,48 @@
 {% extends "console/layout.html" %}
 {% block content %}
-<p>{{ messages.get("admin-home-intro") }}</p>
-<ul class="admin-sections">
-<li><a href="{{ tenant }}/admin/clients">{{ messages.get("admin-nav-clients") }}</a></li>
-<li><a href="{{ tenant }}/admin/status">{{ messages.get("admin-nav-status") }}</a></li>
-<li><a href="{{ tenant }}/admin/audit-logs">{{ messages.get("admin-nav-audit") }}</a></li>
-<li><a href="{{ tenant }}/admin/users">{{ messages.get("admin-nav-permissions") }}</a></li>
-<li><a href="{{ tenant }}/admin/users/new">{{ messages.get("admin-nav-users-new") }}</a></li>
-<li><a href="{{ tenant }}/admin/members">{{ messages.get("admin-nav-members") }}</a></li>
-<li><a href="{{ tenant }}/admin/invitations">{{ messages.get("admin-nav-invitations") }}</a></li>
-<li><a href="{{ tenant }}/admin/signing-keys">{{ messages.get("admin-nav-signing-keys") }}</a></li>
-<li><a href="{{ tenant }}/admin/settings">{{ messages.get("admin-nav-settings") }}</a></li>
-<li><a href="{{ tenant }}/admin/tenants">{{ messages.get("admin-nav-tenants") }}</a></li>
-</ul>
+<section class="console-hero">
+  <p class="eyebrow">{{ messages.get("admin-console-title") }}</p>
+  <h1>{{ messages.get("admin-home-heading") }}</h1>
+  <p>{{ messages.get("admin-home-intro") }}</p>
+</section>
+
+<div class="admin-section-groups" aria-label="{{ messages.get("admin-home-groups-label") }}">
+  <section class="admin-section-group">
+    <h2>{{ messages.get("admin-home-group-operations") }}</h2>
+    <p>{{ messages.get("admin-home-group-operations-desc") }}</p>
+    <ul class="admin-sections">
+      <li><a href="{{ tenant }}/admin/status"><span>{{ messages.get("admin-nav-status") }}</span><small>{{ messages.get("admin-nav-status-desc") }}</small></a></li>
+      <li><a href="{{ tenant }}/admin/audit-logs"><span>{{ messages.get("admin-nav-audit") }}</span><small>{{ messages.get("admin-nav-audit-desc") }}</small></a></li>
+    </ul>
+  </section>
+
+  <section class="admin-section-group">
+    <h2>{{ messages.get("admin-home-group-access") }}</h2>
+    <p>{{ messages.get("admin-home-group-access-desc") }}</p>
+    <ul class="admin-sections">
+      <li><a href="{{ tenant }}/admin/users"><span>{{ messages.get("admin-nav-permissions") }}</span><small>{{ messages.get("admin-nav-permissions-desc") }}</small></a></li>
+      <li><a href="{{ tenant }}/admin/users/new"><span>{{ messages.get("admin-nav-users-new") }}</span><small>{{ messages.get("admin-nav-users-new-desc") }}</small></a></li>
+      <li><a href="{{ tenant }}/admin/members"><span>{{ messages.get("admin-nav-members") }}</span><small>{{ messages.get("admin-nav-members-desc") }}</small></a></li>
+      <li><a href="{{ tenant }}/admin/invitations"><span>{{ messages.get("admin-nav-invitations") }}</span><small>{{ messages.get("admin-nav-invitations-desc") }}</small></a></li>
+    </ul>
+  </section>
+
+  <section class="admin-section-group">
+    <h2>{{ messages.get("admin-home-group-integration") }}</h2>
+    <p>{{ messages.get("admin-home-group-integration-desc") }}</p>
+    <ul class="admin-sections">
+      <li><a href="{{ tenant }}/admin/clients"><span>{{ messages.get("admin-nav-clients") }}</span><small>{{ messages.get("admin-nav-clients-desc") }}</small></a></li>
+      <li><a href="{{ tenant }}/admin/signing-keys"><span>{{ messages.get("admin-nav-signing-keys") }}</span><small>{{ messages.get("admin-nav-signing-keys-desc") }}</small></a></li>
+    </ul>
+  </section>
+
+  <section class="admin-section-group">
+    <h2>{{ messages.get("admin-home-group-settings") }}</h2>
+    <p>{{ messages.get("admin-home-group-settings-desc") }}</p>
+    <ul class="admin-sections">
+      <li><a href="{{ tenant }}/admin/settings"><span>{{ messages.get("admin-nav-settings") }}</span><small>{{ messages.get("admin-nav-settings-desc") }}</small></a></li>
+      <li><a href="{{ tenant }}/admin/tenants"><span>{{ messages.get("admin-nav-tenants") }}</span><small>{{ messages.get("admin-nav-tenants-desc") }}</small></a></li>
+    </ul>
+  </section>
+</div>
 {% endblock %}
