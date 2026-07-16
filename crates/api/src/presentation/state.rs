@@ -33,6 +33,7 @@ use crate::application::password_reset::PasswordResetService;
 use crate::application::permission_management::PermissionManagementService;
 use crate::application::register::RegisterService;
 use crate::application::revocation::RevocationService;
+use crate::application::saml_provider_management::SamlProviderManagementService;
 use crate::application::system_settings::SystemSettingsService;
 use crate::application::tenant_management::TenantManagementService;
 use crate::application::tenant_resolution::TenantResolutionService;
@@ -65,6 +66,7 @@ use crate::infrastructure::repositories::passkey_challenge::SqlxPasskeyChallenge
 use crate::infrastructure::repositories::password_reset_token::SqlxPasswordResetTokenRepository;
 use crate::infrastructure::repositories::refresh_token::SqlxRefreshTokenRepository;
 use crate::infrastructure::repositories::revoked_access_token::SqlxRevokedAccessTokenRepository;
+use crate::infrastructure::repositories::saml_provider::SqlxSamlIdentityProviderRepository;
 use crate::infrastructure::repositories::signing_key::SqlxSigningKeyRepository;
 use crate::infrastructure::repositories::sso_session::SqlxSsoSessionRepository;
 use crate::infrastructure::repositories::system_setting::SqlxSystemSettingsRepository;
@@ -137,6 +139,8 @@ pub struct AppState {
     pub mfa_login: Arc<MfaLoginService>,
     pub passkey_registration: Arc<PasskeyRegistrationService>,
     pub passkey_authentication: Arc<PasskeyAuthenticationService>,
+    /// SAML 外部 IdP 連携設定（テナント管理者向け）。
+    pub saml_providers: Arc<SamlProviderManagementService>,
 }
 
 impl AppState {
@@ -151,6 +155,7 @@ impl AppState {
         let refresh_tokens = Arc::new(SqlxRefreshTokenRepository::new(pool.clone()));
         let revoked_access_tokens = Arc::new(SqlxRevokedAccessTokenRepository::new(pool.clone()));
         let signing_keys = Arc::new(SqlxSigningKeyRepository::new(pool.clone()));
+        let saml_provider_repo = Arc::new(SqlxSamlIdentityProviderRepository::new(pool.clone()));
         let tenants = Arc::new(SqlxTenantRepository::new(pool.clone()));
         // scope→権限解決（ADR-0009 §7）: `has_permission` の判定結果を TTL キャッシュし、付与・剥奪時に
         // invalidate する。判定（admin_access）と変更（permissions_admin）が同一インスタンスを共有する
@@ -179,6 +184,11 @@ impl AppState {
         ));
 
         let audit = Arc::new(AuditService::new(audit_sink, clock.clone()));
+        let saml_providers = Arc::new(SamlProviderManagementService::new(
+            saml_provider_repo,
+            ids.clone(),
+            clock.clone(),
+        ));
         // システム設定（SMTP 等。root のみ。MT14）。秘匿値は key_encryption_key で暗号化して保存する。
         let system_settings = Arc::new(SystemSettingsService::new(
             Arc::new(SqlxSystemSettingsRepository::new(pool.clone())),
@@ -526,6 +536,7 @@ impl AppState {
             mfa_login,
             passkey_registration,
             passkey_authentication,
+            saml_providers,
         }
     }
 }

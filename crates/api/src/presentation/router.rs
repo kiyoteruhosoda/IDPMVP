@@ -3,9 +3,9 @@
 use crate::presentation::correlation;
 use crate::presentation::handlers::{
     admin, admin_audit, admin_clients, admin_invitations, admin_members, admin_permissions,
-    admin_signing_keys, admin_system_settings, admin_tenants, admin_users, authorize, consent,
-    discovery, health, internal_auth, introspect, invitations, logout, mfa, passkey, register,
-    revoke, token, userinfo,
+    admin_saml_providers, admin_signing_keys, admin_system_settings, admin_tenants, admin_users,
+    authorize, consent, discovery, health, internal_auth, introspect, invitations, logout, mfa,
+    passkey, register, revoke, token, userinfo,
 };
 use crate::presentation::openapi::ApiDoc;
 use crate::presentation::security_headers::add_security_headers;
@@ -175,6 +175,11 @@ pub fn build(state: AppState) -> Router {
         )
         // 監査ログ参照（A3、設計仕様 §7）。idp.tenant.admin 必須。
         .route("/admin/audit-logs", get(admin_audit::list_audit_logs))
+        // SAML 外部 IdP 連携設定。idp.tenant.admin 必須。
+        .route(
+            "/admin/saml-providers",
+            post(admin_saml_providers::register),
+        )
         // 署名鍵管理 API（K1）。idp.tenant.admin 必須。
         .route(
             "/admin/signing-keys",

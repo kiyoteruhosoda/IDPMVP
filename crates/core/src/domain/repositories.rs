@@ -30,6 +30,7 @@ use crate::domain::passkey_challenge::PasskeyChallenge;
 use crate::domain::password_reset::PasswordResetToken;
 use crate::domain::refresh_token::RefreshToken;
 use crate::domain::revoked_access_token::RevokedAccessToken;
+use crate::domain::saml_provider::SamlIdentityProvider;
 use crate::domain::signing_key::SigningKey;
 use crate::domain::sso_session::SsoSession;
 use crate::domain::system_setting::SystemSetting;
@@ -160,6 +161,13 @@ pub trait ClientRepository: Send + Sync {
     /// 可変項目（app_name / redirect_uris / scopes / status / secret_hash 等）を更新する。
     /// `(id, tenant_id)` で対象を特定する（他テナントの行は更新できない）。対象が無い場合は `NotFound`。
     async fn update(&self, client: &Client) -> Result<()>;
+}
+
+/// SAML 外部 IdP 設定の永続化。テナント境界は `tenant_id` で強制する。
+#[async_trait]
+pub trait SamlIdentityProviderRepository: Send + Sync {
+    async fn create(&self, provider: &SamlIdentityProvider) -> Result<()>;
+    async fn latest_for_tenant(&self, tenant_id: TenantId) -> Result<Option<SamlIdentityProvider>>;
 }
 
 #[async_trait]

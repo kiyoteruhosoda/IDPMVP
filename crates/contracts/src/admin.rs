@@ -79,3 +79,26 @@ pub struct GenerateSigningKeyRequest {
     /// `RS256` または `ES256`。
     pub algorithm: String,
 }
+
+/// SAML 外部 IdP 登録リクエスト（`POST /admin/saml-providers`）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SamlProviderRegisterRequest {
+    pub display_name: String,
+    pub entity_id: String,
+    pub sso_url: String,
+    pub x509_certificate: String,
+    pub enabled: bool,
+}
+
+/// SAML 外部 IdP の管理 API 表現。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SamlProviderResponse {
+    pub id: String,
+    pub tenant_id: String,
+    pub display_name: String,
+    pub entity_id: String,
+    pub sso_url: String,
+    pub enabled: bool,
+    pub created_at: String,
+    pub updated_at: String,
+}
