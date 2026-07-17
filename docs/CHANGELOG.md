@@ -1,3 +1,16 @@
+## 2026-07-17（web UI を photonest と同じ Bootstrap フォーマットへ全面刷新）
+
+- **crates/web — 全画面を Bootstrap 5 + Font Awesome の photonest フォーマットで書き換え**: 認証系
+  画面（ログイン・同意・パスワード関連・MFA・Passkey 等）は中央寄せカード型の共通ベース
+  `templates/page.html` を新設して継承、管理コンソールは `console/layout.html` をナビバー＋
+  常設サイドバー（<768px はオフキャンバスドロワー）＋フッタ構成へ刷新した。表は `table-hover`、
+  通知は `alert`、状態表示は `badge` に統一。フォーム名・hidden 値・JS フック（Passkey/WebAuthn、
+  `data-react-surface`）は従来どおり維持。
+- **crates/web — Bootstrap 5.3.3 / Font Awesome Free 7.3.0 をベンダリング**: `assets/vendor/` 配下に
+  同梱し `handlers/vendor_assets.rs` から `/assets/vendor/...` として自オリジン配信
+  （CSP `default-src 'self'` 準拠。外部 CDN 非依存）。`assets/app.css` は DADS パレット一式を廃し、
+  サイドバー幅等の最小限の Bootstrap 補完のみに縮小した。
+
 ## 2026-07-15（web 共通スタイルシートの導入）
 
 - **crates/web — 全画面へ共通 CSS を適用**: これまで web の各テンプレートは CSS を一切読み込まず
