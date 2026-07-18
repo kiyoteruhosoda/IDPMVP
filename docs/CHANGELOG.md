@@ -4,8 +4,8 @@
   サーバ既定照合（`mariadb:10.11` は `utf8mb4_general_ci`）と `tenants`（`utf8mb4_unicode_ci`）の照合不一致で
   外部キーが errno 150 となり、新規 DB への適用（CI 含む）が必ず失敗していた。他テーブルと同じ
   `ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci` を明示し、時刻列を規約どおり
-  `DATETIME(6)` へ、utf8mb4 化で索引キー上限（3072 バイト）を超える一意制約は `entity_id(700)` の
-  プレフィックス一意へ変更した。
+  `DATETIME(6)` へ変更した（`(tenant_id, entity_id)` の一意制約は索引キー上限を超えるため、
+  MariaDB が長キー一意制約 `USING HASH` として作成する）。
 
 ## 2026-07-17（web UI を photonest と同じ Bootstrap フォーマットへ全面刷新）
 
