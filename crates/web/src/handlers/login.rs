@@ -174,11 +174,17 @@ pub async fn login(
             )
                 .into_response()
         }
-        InternalAuthenticateResponse::SessionExpired => error_page(
-            &messages,
-            StatusCode::BAD_REQUEST,
-            "login-error-session-expired",
-        ),
+        InternalAuthenticateResponse::SessionExpired => {
+            // 期限切れ・不正な auth_session_id はここでクリアして `/login` へ戻す。Cookie が無くなれば
+            // 次の GET はポータルログイン（クライアント非依存）を表示するため、放置された OIDC セッション
+            // Cookie が残ってもエンドユーザーが自分のアカウント画面へ入れなくなる状態を自己回復する。
+            let expire = cookies::expire(cookies::AUTH_SESSION_COOKIE, secure);
+            (
+                AppendHeaders([(header::SET_COOKIE, expire)]),
+                found(&format!("{}/login", tenant.prefix())),
+            )
+                .into_response()
+        }
         InternalAuthenticateResponse::CsrfMismatch => {
             error_page(&messages, StatusCode::BAD_REQUEST, "login-error-csrf")
         }
