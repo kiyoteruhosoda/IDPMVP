@@ -328,13 +328,16 @@ remove_stale_renamed_containers() {
   # 「<旧コンテナID先頭12桁>_<コンテナ名>」へ一時リネームしてから新コンテナを作る。
   # 前回のデプロイが途中で中断されるとこのリネーム済みコンテナが残り、次回の入れ替えが
   # 「Conflict. The container name ... is already in use」で失敗するため、事前に削除する。
+  # 他プロジェクトを誤削除しないよう Compose のプロジェクトラベルで絞り込み、
+  # コンテナ名の区切りは v2（-）と v1／互換モード（_）の両方を許容する。
   local cid name
   while read -r cid name; do
     [[ -n "$cid" ]] || continue
     warn "前回の入れ替えで残った一時コンテナを削除します: $name"
     docker rm -f "$cid" >/dev/null || warn "一時コンテナ $name (id=$cid) の削除に失敗しました。"
-  done < <(docker ps -a --format '{{.ID}} {{.Names}}' 2>/dev/null \
-    | grep -E "^[0-9a-f]+ [0-9a-f]{12}_${COMPOSE_PROJECT}-[a-z]+-[0-9]+$" || true)
+  done < <(docker ps -a --filter "label=com.docker.compose.project=${COMPOSE_PROJECT}" \
+      --format '{{.ID}} {{.Names}}' 2>/dev/null \
+    | grep -E "^[0-9a-f]+ [0-9a-f]{12}_${COMPOSE_PROJECT}[-_][a-z]+[-_][0-9]+$" || true)
 }
 
 replace_app_containers() {
