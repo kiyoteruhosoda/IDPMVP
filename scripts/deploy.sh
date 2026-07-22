@@ -189,6 +189,9 @@ merge_missing_env_keys() {
     [[ "$key" == COMPOSE_PROJECT_NAME ]] && continue
     [[ -z "$value" || "$value" == *CHANGE-ME* ]] && continue
     grep -qE "^[[:space:]]*${key}=" "$env_file" && continue
+    # 追記前に末尾改行を保証する。手編集で末尾改行の無い .env でも、最終行の値へ連結して
+    # 壊さないようにする（例: `FOO=bar` + `LOG_FORMAT=pretty` → `FOO=barLOG_FORMAT=...` を防ぐ）。
+    if [[ -s "$env_file" && -n "$(tail -c1 "$env_file")" ]]; then printf '\n' >>"$env_file"; fi
     printf '%s\n' "$line" >>"$env_file"
     added=$((added + 1))
   done <"$example_file"

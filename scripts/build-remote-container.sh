@@ -49,9 +49,25 @@ command -v docker >/dev/null 2>&1 || die "docker が見つかりません。"
 cd "$target_dir"
 log "START  project=$project  mode=$mode  target=$target_dir"
 
+# デプロイ先 .env のイメージ設定（IMAGE_TAG / IMAGE_PREFIX）をビルドへ引き継ぐ。これを揃えないと
+# build.sh は既定（idp/*:latest）で作る一方、docker-compose.deploy.yml は .env のタグを要求して
+# 起動時にイメージ不一致で失敗する（stg/prod タグ・カスタム prefix 運用への対応）。環境変数が
+# 明示されていればそれを優先し、無ければ既存 .env から読む（初回は .env 未生成のため既定値）。
+read_env_value() {
+  local key="$1"
+  [[ -f "$target_dir/.env" ]] || return 0
+  grep -E "^${key}=" "$target_dir/.env" | tail -n1 | cut -d= -f2- | tr -d '\r'
+}
+image_tag="${IMAGE_TAG:-$(read_env_value IMAGE_TAG)}"
+image_prefix="${IMAGE_PREFIX:-$(read_env_value IMAGE_PREFIX)}"
+image_tag="${image_tag:-latest}"
+image_prefix="${image_prefix:-idp}"
+
 # --- BUILD（dev コンテナ内で git pull → build.sh） ------------------------------
-log "BUILD  dev コンテナ '$dev_container' でビルドします（$dev_workdir）..."
-docker exec -u "$dev_user" "$dev_container" bash -lc "
+log "BUILD  dev コンテナ '$dev_container' でビルドします（$dev_workdir, image=${image_prefix}/*:${image_tag}）..."
+docker exec \
+  -e IMAGE_TAG="$image_tag" -e IMAGE_PREFIX="$image_prefix" \
+  -u "$dev_user" "$dev_container" bash -lc "
   set -e
   cd '$dev_workdir'
   git pull --ff-only
@@ -61,7 +77,17 @@ docker exec -u "$dev_user" "$dev_container" bash -lc "
 # --- PICK（ビルド済み dist をデプロイ先へ取り込み。旧 pick.sh 相当） --------------
 log "PICK   $dist_dir → $target_dir"
 [[ -d "$dist_dir" ]] || die "dist が見つかりません: $dist_dir（build.sh の出力先か IDP_DIST_DIR を確認）。"
+# デプロイ先の .env は取り込みで絶対に壊さない（秘密情報を保全）。万一 dist 側に .env が紛れても
+# 上書きしないよう、コピー前に退避し、コピー後に戻す（.env の管理は deploy.sh に一本化）。
+env_backup=""
+if [[ -f "$target_dir/.env" ]]; then
+  env_backup="$(mktemp)"
+  cp -a "$target_dir/.env" "$env_backup"
+fi
 cp -a "$dist_dir/." "$target_dir/"
+if [[ -n "$env_backup" ]]; then
+  mv -f "$env_backup" "$target_dir/.env"
+fi
 [[ -f "$target_dir/deploy.sh" ]] || die "deploy.sh が取り込まれていません（build.sh の出力を確認）。"
 chmod +x "$target_dir"/*.sh 2>/dev/null || true
 

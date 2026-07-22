@@ -113,6 +113,14 @@ if grep -qE '^[A-Za-z_][A-Za-z0-9_]*=.*CHANGE-ME' .env; then
   exit 1
 fi
 
+# 末尾改行の無い（手編集）.env でも、最終行の値を壊さず追記する（境界の正規化）。
+sed -i '/^LOG_FORMAT=/d' .env
+printf 'SENTINEL_KEEP=keepme' >>.env   # 末尾改行なしの最終行を作る
+: >"$DOCKER_STUB_LOG"
+./scripts/deploy.sh app >/tmp/deploy-nonl.out 2>&1
+grep -q '^SENTINEL_KEEP=keepme$' .env || { echo "last line without trailing newline was corrupted by append" >&2; exit 1; }
+grep -q '^LOG_FORMAT=pretty$' .env || { echo "key not appended after newline normalization" >&2; exit 1; }
+
 set +e
 DOCKER_STUB_FAIL_MIGRATE=1 ./scripts/deploy.sh migrate >/tmp/deploy-migrate-fail.out 2>&1
 status=$?
