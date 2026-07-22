@@ -48,6 +48,14 @@ if [[ "${1:-}" == "compose" ]]; then
     down) exit 0 ;;
     ps) printf 'cid-%s\n' "${3:-svc}"; exit 0 ;;
     exec)
+      if [[ "${DOCKER_STUB_FAIL_DB_AUTH:-0}" == "1" && "$*" == *"SELECT 1"* ]]; then
+        echo "ERROR 1045 (28000): Access denied for user 'idp'@'172.27.0.6' (using password: YES)" >&2
+        exit 1
+      fi
+      if [[ "${DOCKER_STUB_FAIL_DB_CONN:-0}" == "1" && "$*" == *"SELECT 1"* ]]; then
+        echo "ERROR 1049 (42000): Unknown database 'idp'" >&2
+        exit 1
+      fi
       if [[ "$*" == *"SELECT id FROM tenants"* ]]; then printf '01970000-0000-7000-8000-000000000001\n'; fi
       exit 0 ;;
     logs) echo "stub docker logs for ${*: -1}: ${MARIADB_PASSWORD:-secret}"; exit 0 ;;
@@ -131,6 +139,48 @@ grep -q '\[idp\]\[diagnostic\] logs tail: migrate' /tmp/deploy-migrate-fail.out
 grep -q '\[idp\]\[diagnostic\] logs tail: mariadb' /tmp/deploy-migrate-fail.out
 if grep -q "$(grep '^MARIADB_PASSWORD=' .env | cut -d= -f2-)" /tmp/deploy-migrate-fail.out; then
   echo "secret was not masked in migration diagnostics" >&2
+  exit 1
+fi
+
+# アプリ用 DB ユーザーの認証が失敗する（既存 volume と .env のパスワード不一致）場合は、意味のない
+# migrate リトライではなくプリフライトで即座に停止し、原因と対処を提示する。
+: >"$DOCKER_STUB_LOG"
+set +e
+DOCKER_STUB_FAIL_DB_AUTH=1 ./scripts/deploy.sh migrate >/tmp/deploy-db-auth-fail.out 2>&1
+status=$?
+set -e
+[[ $status -eq 1 ]] || { echo "deploy must fail fast when app DB user auth fails" >&2; cat /tmp/deploy-db-auth-fail.out >&2; exit 1; }
+grep -q 'DB authentication preflight failed' /tmp/deploy-db-auth-fail.out ||
+  { echo "preflight failure diagnostic missing" >&2; exit 1; }
+grep -q 'MARIADB_PASSWORD' /tmp/deploy-db-auth-fail.out ||
+  { echo "preflight diagnostic must mention MARIADB_PASSWORD mismatch" >&2; exit 1; }
+grep -q './deploy.sh reset' /tmp/deploy-db-auth-fail.out ||
+  { echo "preflight diagnostic must suggest reset remedy" >&2; exit 1; }
+if grep -q 'run --rm migrate' "$DOCKER_STUB_LOG"; then
+  echo "migrate must not run when DB auth preflight fails" >&2
+  exit 1
+fi
+if grep -q "$(grep '^MARIADB_PASSWORD=' .env | cut -d= -f2-)" /tmp/deploy-db-auth-fail.out; then
+  echo "secret was not masked in preflight diagnostics" >&2
+  exit 1
+fi
+
+# 認証以外（例: DB 不在）でプリフライトが失敗する場合は、破壊的な reset を勧める password-drift
+# 診断ではなく、汎用の接続/クエリ失敗として報告する（誤ってデータ削除へ誘導しない）。
+: >"$DOCKER_STUB_LOG"
+set +e
+DOCKER_STUB_FAIL_DB_CONN=1 ./scripts/deploy.sh migrate >/tmp/deploy-db-conn-fail.out 2>&1
+status=$?
+set -e
+[[ $status -eq 1 ]] || { echo "deploy must fail fast on non-auth preflight error" >&2; cat /tmp/deploy-db-conn-fail.out >&2; exit 1; }
+grep -q 'DB preflight failed (non-authentication error)' /tmp/deploy-db-conn-fail.out ||
+  { echo "non-auth preflight failure must be reported distinctly" >&2; exit 1; }
+if grep -q './deploy.sh reset' /tmp/deploy-db-conn-fail.out; then
+  echo "non-auth preflight failure must NOT recommend destructive reset" >&2
+  exit 1
+fi
+if grep -q 'run --rm migrate' "$DOCKER_STUB_LOG"; then
+  echo "migrate must not run when DB preflight fails" >&2
   exit 1
 fi
 
