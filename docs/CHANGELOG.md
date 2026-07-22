@@ -3,9 +3,10 @@
 
 - **crates/core・api・web — 外部 SAML IdP 連携を削除**: 本プロダクトは IdP であり、他 IdP に依存
   （identity brokering）しない方針とした。本製品が SP として外部 IdP でログインする機能一式
-  （`/admin/saml`「SAML 連携アプリ」・`saml_identity_providers`・`SamlProviderManagementService`・
-  `parse_idp_metadata` 等）を削除し、マイグレーション `0011` でテーブルを DROP した。SP（クライアント）
-  登録（`/admin/saml-clients`）と IdP メタデータ出力（`/saml/metadata`）は維持する。
+  （`/admin/saml`「SAML 連携アプリ」・`SamlProviderManagementService`・`parse_idp_metadata` 等）を削除した。
+  破壊的 DDL は expand/contract で分割する（ADR-0004 §6）ため、`saml_identity_providers` テーブル自体は
+  未使用のまま残置し、DROP は旧アプリが完全にいなくなった後続リリース（contract フェーズ。Progress MT28）で
+  行う。SP（クライアント）登録（`/admin/saml-clients`）と IdP メタデータ出力（`/saml/metadata`）は維持する。
 
 ## 2026-07-22（SAML: IdP メタデータ出力と SP（クライアント）登録）
 
