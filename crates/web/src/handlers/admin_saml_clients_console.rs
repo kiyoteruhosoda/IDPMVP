@@ -7,14 +7,14 @@ use super::locale;
 use crate::api_client::AdminApiError;
 use crate::correlation::CorrelationId;
 use crate::csrf::console_csrf_token;
-use crate::dto::{AdminSamlServiceProviderForm, AdminSamlSpMetadataImportForm};
+use crate::dto::AdminSamlServiceProviderForm;
 use crate::handlers::admin_console::{redirect_to_login, resolve_admin, AdminResolution};
 use crate::handlers::found;
 use crate::i18n::Messages;
 use crate::state::WebState;
 use crate::templates::{render, SamlServiceProviderFormValues, SamlServiceProvidersConsole};
 use crate::tenant::WebTenant;
-use axum::extract::{Extension, Query, State};
+use axum::extract::{Extension, Multipart, Query, State};
 use axum::http::HeaderMap;
 use axum::response::{Html, IntoResponse, Response};
 use axum::Form;
@@ -121,57 +121,117 @@ pub async fn create(
     }
 }
 
-/// SP メタデータ XML を取り込み、登録フォームに初期値を反映して再描画する（PRG は挟まない）。
+/// アップロードされた SP メタデータファイルを UTF-8 文字列で読む。空なら `Ok(None)`、
+/// サイズ上限超過・非 UTF-8・読み取り失敗は `Err(())`。
+async fn read_metadata_file(
+    field: axum::extract::multipart::Field<'_>,
+) -> Result<Option<String>, ()> {
+    // メタデータは通常数 KB。リクエスト全体は DefaultBodyLimit でも制限されるが、念のため上限を設ける。
+    const MAX_METADATA_BYTES: usize = 1024 * 1024;
+    let bytes = field.bytes().await.map_err(|_| ())?;
+    if bytes.is_empty() {
+        return Ok(None);
+    }
+    if bytes.len() > MAX_METADATA_BYTES {
+        return Err(());
+    }
+    let text = String::from_utf8(bytes.to_vec()).map_err(|_| ())?;
+    Ok((!text.trim().is_empty()).then_some(text))
+}
+
+/// SP メタデータを取り込み、登録フォームに初期値を反映して再描画する（PRG は挟まない）。
+/// 取り込み元はファイルアップロード（`metadata_file`）または貼り付け（`metadata_xml`）。ファイルを優先する。
 pub async fn import_metadata(
     State(state): State<WebState>,
     Extension(correlation): Extension<CorrelationId>,
     Extension(tenant): Extension<WebTenant>,
     headers: HeaderMap,
-    Form(form): Form<AdminSamlSpMetadataImportForm>,
+    mut multipart: Multipart,
 ) -> Response {
     let admin = match resolve_admin(&state, &correlation, &tenant, &headers).await {
         AdminResolution::Ok(uid) => uid,
         AdminResolution::Reject(resp) => return resp,
     };
     let base = format!("{}/admin/saml-clients", tenant.prefix());
-    if csrf_from(&headers, state.config.csrf_secret()) != form.csrf_token {
+
+    // multipart から CSRF トークン・貼り付け XML・アップロードファイルを読み取る。
+    let mut csrf_token = String::new();
+    let mut pasted_xml = String::new();
+    let mut uploaded_xml: Option<String> = None;
+    let mut read_failed = false;
+    loop {
+        match multipart.next_field().await {
+            Ok(Some(field)) => match field.name() {
+                Some("csrf_token") => csrf_token = field.text().await.unwrap_or_default(),
+                Some("metadata_xml") => pasted_xml = field.text().await.unwrap_or_default(),
+                Some("metadata_file") => match read_metadata_file(field).await {
+                    Ok(Some(xml)) => uploaded_xml = Some(xml),
+                    Ok(None) => {}
+                    Err(()) => read_failed = true,
+                },
+                _ => {
+                    let _ = field.bytes().await;
+                }
+            },
+            Ok(None) => break,
+            Err(_) => {
+                read_failed = true;
+                break;
+            }
+        }
+    }
+
+    if csrf_from(&headers, state.config.csrf_secret()) != csrf_token {
         return found(&format!("{base}?error=csrf"));
     }
     let sso = crate::cookies::get(&headers, crate::cookies::SSO_SESSION_COOKIE).unwrap_or_default();
 
-    let (values, imported, error_key) = match state
-        .api
-        .import_saml_sp_metadata(&correlation.0, &tenant.0, &sso, &form.metadata_xml)
-        .await
-    {
-        Ok(parsed) => (
-            SamlServiceProviderFormValues {
-                display_name: parsed.display_name,
-                entity_id: parsed.entity_id,
-                acs_url: parsed.acs_url,
-                name_id_format: parsed.name_id_format,
-                x509_certificate: parsed.x509_certificate,
-                enabled: true,
-            },
-            true,
-            None,
-        ),
-        Err(AdminApiError::Unauthorized) => return redirect_to_login(&tenant),
-        Err(AdminApiError::Forbidden) => (
-            SamlServiceProviderFormValues::default(),
-            false,
-            Some("admin-settings-error-forbidden"),
-        ),
-        Err(AdminApiError::Validation(_) | AdminApiError::NotFound) => (
+    // ファイルがあればその内容を優先し、無ければ貼り付けテキストを使う。
+    let metadata_xml = uploaded_xml
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or(pasted_xml);
+
+    let (values, imported, error_key) = if read_failed || metadata_xml.trim().is_empty() {
+        (
             SamlServiceProviderFormValues::default(),
             false,
             Some("admin-saml-client-error-import"),
-        ),
-        Err(AdminApiError::Conflict(_) | AdminApiError::Transport(_)) => (
-            SamlServiceProviderFormValues::default(),
-            false,
-            Some("admin-error-internal"),
-        ),
+        )
+    } else {
+        match state
+            .api
+            .import_saml_sp_metadata(&correlation.0, &tenant.0, &sso, &metadata_xml)
+            .await
+        {
+            Ok(parsed) => (
+                SamlServiceProviderFormValues {
+                    display_name: parsed.display_name,
+                    entity_id: parsed.entity_id,
+                    acs_url: parsed.acs_url,
+                    name_id_format: parsed.name_id_format,
+                    x509_certificate: parsed.x509_certificate,
+                    enabled: true,
+                },
+                true,
+                None,
+            ),
+            Err(AdminApiError::Unauthorized) => return redirect_to_login(&tenant),
+            Err(AdminApiError::Forbidden) => (
+                SamlServiceProviderFormValues::default(),
+                false,
+                Some("admin-settings-error-forbidden"),
+            ),
+            Err(AdminApiError::Validation(_) | AdminApiError::NotFound) => (
+                SamlServiceProviderFormValues::default(),
+                false,
+                Some("admin-saml-client-error-import"),
+            ),
+            Err(AdminApiError::Conflict(_) | AdminApiError::Transport(_)) => (
+                SamlServiceProviderFormValues::default(),
+                false,
+                Some("admin-error-internal"),
+            ),
+        }
     };
 
     let providers = state

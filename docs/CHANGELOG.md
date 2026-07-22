@@ -1,4 +1,12 @@
 
+## 2026-07-22（SAML: SP 登録メタデータのファイルアップロード対応）
+
+- **crates/web — SP（クライアント）登録のメタデータ取り込みをファイルアップロードにも対応**: 管理コンソール
+  （`/{tenant_id}/admin/saml-clients`）の取り込みフォームを `multipart/form-data` にし、`.xml` ファイルの
+  アップロード（`metadata_file`）を追加。従来の貼り付け（`metadata_xml`）も維持し、両方あればファイルを優先する。
+  ハンドラは multipart を読み、UTF-8・サイズ上限（1 MiB）を検証してから既存の取り込み API へ委譲する。
+  axum の `multipart` feature を web crate に追加。i18n（en/ja）にファイル項目のラベル・ヒントを追加。
+
 ## 2026-07-22（デプロイ: ディレクトリ名で stg/prod の .env を初回自動選択）
 
 - **scripts — 初回 `.env` 生成をデプロイディレクトリ名から判定**: デプロイ先ディレクトリ名が `stg`/`staging`/
