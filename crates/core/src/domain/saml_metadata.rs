@@ -57,35 +57,45 @@ pub fn parse_idp_metadata(xml: &str) -> Result<ImportedIdpMetadata> {
 
     let mut capture: Option<Capture> = None;
     let mut text_buf = String::new();
+    // 集約メタデータ（`EntitiesDescriptor` に複数の `EntityDescriptor`）では最初の `EntityDescriptor`
+    // だけを対象にする。異なるエンティティの entityID・SSO・証明書が混在すると認証できない設定に
+    // なるため、子要素の収集は最初のエンティティ内（`in_entity`）に限定し、その終了で解析を打ち切る。
+    let mut in_entity = false;
 
     loop {
         match reader
             .read_event()
             .map_err(|e| DomainError::InvalidValue(format!("invalid SAML metadata XML: {e}")))?
         {
-            Event::Start(e) | Event::Empty(e) => match local(&e) {
-                b"EntityDescriptor" => {
-                    if entity_id.is_none() {
-                        entity_id = attribute(&e, b"entityID");
-                    }
+            Event::Start(e) => match local(&e) {
+                b"EntityDescriptor" if entity_id.is_none() => {
+                    entity_id = attribute(&e, b"entityID");
+                    in_entity = true;
                 }
-                b"IDPSSODescriptor" => in_idp = true,
-                b"SingleSignOnService" if in_idp => {
-                    if let (Some(binding), Some(location)) =
-                        (attribute(&e, b"Binding"), attribute(&e, b"Location"))
-                    {
-                        sso_candidates.push((binding, location));
-                    }
-                }
-                b"KeyDescriptor" if in_idp => key_use = attribute(&e, b"use"),
-                b"X509Certificate" if in_idp && key_use.as_deref() != Some("encryption") => {
+                b"IDPSSODescriptor" if in_entity => in_idp = true,
+                b"KeyDescriptor" if in_entity && in_idp => key_use = attribute(&e, b"use"),
+                b"SingleSignOnService" if in_entity && in_idp => push_sso(&e, &mut sso_candidates),
+                b"X509Certificate"
+                    if in_entity && in_idp && key_use.as_deref() != Some("encryption") =>
+                {
                     capture = Some(Capture::Certificate);
                     text_buf.clear();
                 }
-                b"OrganizationDisplayName" | b"OrganizationName" if display_name.is_none() => {
+                b"OrganizationDisplayName" | b"OrganizationName"
+                    if in_entity && display_name.is_none() =>
+                {
                     capture = Some(Capture::DisplayName);
                     text_buf.clear();
                 }
+                _ => {}
+            },
+            // 空要素（自己終了タグ）。子を持たない `EntityDescriptor` は退化ケースとして entityID のみ拾う。
+            Event::Empty(e) => match local(&e) {
+                b"EntityDescriptor" if entity_id.is_none() => {
+                    entity_id = attribute(&e, b"entityID");
+                }
+                b"KeyDescriptor" if in_entity && in_idp => key_use = attribute(&e, b"use"),
+                b"SingleSignOnService" if in_entity && in_idp => push_sso(&e, &mut sso_candidates),
                 _ => {}
             },
             Event::Text(e) => {
@@ -97,6 +107,8 @@ pub fn parse_idp_metadata(xml: &str) -> Result<ImportedIdpMetadata> {
                 }
             }
             Event::End(e) => match local_end(&e) {
+                // 最初の EntityDescriptor が閉じたら、後続エンティティを読まずに打ち切る。
+                b"EntityDescriptor" if in_entity => break,
                 b"IDPSSODescriptor" => in_idp = false,
                 b"KeyDescriptor" => key_use = None,
                 b"X509Certificate" => {
@@ -161,6 +173,13 @@ pub fn build_sp_metadata_xml(entity_id: &str, acs_url: &str) -> String {
 </md:EntityDescriptor>
 "#
     )
+}
+
+/// `SingleSignOnService` の Binding/Location を SSO 候補へ追加する（両方揃う場合のみ）。
+fn push_sso(e: &BytesStart, out: &mut Vec<(String, String)>) {
+    if let (Some(binding), Some(location)) = (attribute(e, b"Binding"), attribute(e, b"Location")) {
+        out.push((binding, location));
+    }
 }
 
 /// SSO 候補から 1 件選ぶ。HTTP-Redirect → HTTP-POST → 先頭、の優先順。
@@ -276,6 +295,36 @@ mod tests {
 </EntityDescriptor>"#;
         let parsed = parse_idp_metadata(xml).expect("parse");
         assert_eq!(parsed.sso_url, "https://idp.test/post");
+    }
+
+    #[test]
+    fn aggregate_metadata_uses_only_the_first_entity_descriptor() {
+        // 最初のエンティティは POST バインディング、2 番目は Redirect。エンティティ間で混在させず、
+        // 最初の EntityDescriptor（entityID・SSO・証明書）のみを採用する。
+        let xml = r#"<md:EntitiesDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata"
+                                            xmlns:ds="http://www.w3.org/2000/09/xmldsig#">
+  <md:EntityDescriptor entityID="https://first.example.test/idp">
+    <md:IDPSSODescriptor protocolSupportEnumeration="urn:oasis:names:tc:SAML:2.0:protocol">
+      <md:KeyDescriptor use="signing">
+        <ds:KeyInfo><ds:X509Data><ds:X509Certificate>FIRSTcert==</ds:X509Certificate></ds:X509Data></ds:KeyInfo>
+      </md:KeyDescriptor>
+      <md:SingleSignOnService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST" Location="https://first.example.test/sso/post"/>
+    </md:IDPSSODescriptor>
+  </md:EntityDescriptor>
+  <md:EntityDescriptor entityID="https://second.example.test/idp">
+    <md:IDPSSODescriptor protocolSupportEnumeration="urn:oasis:names:tc:SAML:2.0:protocol">
+      <md:KeyDescriptor use="signing">
+        <ds:KeyInfo><ds:X509Data><ds:X509Certificate>SECONDcert==</ds:X509Certificate></ds:X509Data></ds:KeyInfo>
+      </md:KeyDescriptor>
+      <md:SingleSignOnService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect" Location="https://second.example.test/sso/redirect"/>
+    </md:IDPSSODescriptor>
+  </md:EntityDescriptor>
+</md:EntitiesDescriptor>"#;
+        let parsed = parse_idp_metadata(xml).expect("parse");
+        assert_eq!(parsed.entity_id, "https://first.example.test/idp");
+        // 2 番目の Redirect ではなく、最初のエンティティの POST を採用する（混在させない）。
+        assert_eq!(parsed.sso_url, "https://first.example.test/sso/post");
+        assert_eq!(parsed.x509_certificate, "FIRSTcert==");
     }
 
     #[test]
