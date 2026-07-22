@@ -1,4 +1,4 @@
-//! SAML メタデータの統合テスト（DB あり）。SP メタデータ出力（公開）と外部 IdP メタデータ取り込み
+//! SAML メタデータの統合テスト（DB あり）。IdP メタデータ出力（公開）と外部 IdP メタデータ取り込み
 //! （`idp.tenant.admin` 必須）を検証する。
 //!
 //! `TEST_DATABASE_URL` 設定時のみ実行:
@@ -25,10 +25,11 @@ const IDP_METADATA: &str = r#"<?xml version="1.0"?>
   </md:IDPSSODescriptor>
 </md:EntityDescriptor>"#;
 
-/// SP メタデータは認証不要で公開され、テナント issuer を entityID とする整形式 XML を返す。
+/// IdP メタデータは認証不要で公開され、テナント issuer を entityID とし、ACTIVE 署名鍵を含む
+/// 整形式 XML を返す。
 #[tokio::test]
-async fn sp_metadata_is_public_and_tenant_scoped() {
-    let Some(env) = support::setup("saml sp metadata").await else {
+async fn idp_metadata_is_public_and_tenant_scoped() {
+    let Some(env) = support::setup("saml idp metadata").await else {
         return;
     };
     let uri = format!("/{}/saml/metadata", env.root_tenant_id);
@@ -50,11 +51,19 @@ async fn sp_metadata_is_public_and_tenant_scoped() {
         xml.contains(&format!("entityID=\"{tenant_issuer}\"")),
         "entityID must be the tenant issuer: {xml}"
     );
+    // IdP メタデータ（IDPSSODescriptor + SSO）であり、SP メタデータではない。
+    assert!(xml.contains("IDPSSODescriptor"), "IDPSSODescriptor: {xml}");
+    assert!(!xml.contains("SPSSODescriptor"));
     assert!(
-        xml.contains(&format!("{tenant_issuer}/saml/acs")),
-        "ACS URL"
+        xml.contains(&format!("{tenant_issuer}/saml/sso")),
+        "SSO URL"
     );
-    assert!(xml.contains("SPSSODescriptor"));
+    // ブートストラップ済み ACTIVE 署名鍵が RSAKeyValue で埋め込まれる。
+    assert!(
+        xml.contains("<md:KeyDescriptor use=\"signing\">"),
+        "signing KeyDescriptor: {xml}"
+    );
+    assert!(xml.contains("<ds:RSAKeyValue>"));
 }
 
 /// 管理者は外部 IdP メタデータ XML を取り込み、登録候補値を得られる。権限が無ければ拒否される。

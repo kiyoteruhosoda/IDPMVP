@@ -233,8 +233,8 @@ pub fn build(state: AppState) -> Router {
             get(discovery::openid_configuration),
         )
         .route("/.well-known/jwks.json", get(discovery::jwks))
-        // SAML SP メタデータ出力（公開。この IdP を外部 IdP に登録するためのメタデータ）。
-        .route("/saml/metadata", get(discovery::saml_sp_metadata))
+        // SAML IdP メタデータ出力（公開。SP がこの IdP を信頼するために取り込むメタデータ）。
+        .route("/saml/metadata", get(discovery::saml_idp_metadata))
         // テナント解決（UUID 検証・存在/ACTIVE 確認）を全テナントルートへ付与する（ADR-0009 §7）。
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),

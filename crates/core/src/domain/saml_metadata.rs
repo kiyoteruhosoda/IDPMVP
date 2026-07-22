@@ -3,9 +3,8 @@
 //! - 取り込み: 外部 SAML IdP が公開する `EntityDescriptor`（`IDPSSODescriptor`）を解析し、登録に必要な
 //!   `entity_id` / `sso_url` / `x509_certificate` を抽出する。管理者の手入力を置き換える補助であり、
 //!   検証（SSO URL のスキーム等）は登録ユースケース側（[`crate::domain::saml_provider`]）に委ねる。
-//! - 出力: 本 IdP が SAML SP として振る舞う際の `EntityDescriptor`（`SPSSODescriptor`）を生成する。
-//!   外部 IdP 管理者へ渡してこの SP を登録してもらうためのメタデータで、`.well-known/openid-configuration`
-//!   の SAML 版に相当する。
+//! - 出力: 本 IdP の `EntityDescriptor`（`IDPSSODescriptor`）を生成する。SP（クライアント）がこの IdP を
+//!   信頼するために取り込むメタデータで、`.well-known/openid-configuration` の SAML 版に相当する。
 //!
 //! 名前空間の接頭辞（`md:` / `saml:` 等）は実装依存のためローカル名で判定する。属性値・要素本文の
 //! アンエスケープと、出力時の属性値エスケープは `quick-xml` に委ねる（手書きのエスケープを設けない）。
@@ -155,21 +154,54 @@ pub fn parse_idp_metadata(xml: &str) -> Result<ImportedIdpMetadata> {
     })
 }
 
-/// 本 IdP を SAML SP として記述する `EntityDescriptor`（`SPSSODescriptor`）XML を生成する。
+/// IdP の署名鍵の公開表現（XML Signature `RSAKeyValue` 用の base64 の Modulus/Exponent）。
+/// 署名証明書（X.509）は現状の署名鍵基盤（生の RSA 公開鍵）に無いため、`RSAKeyValue` で表現する。
+pub struct IdpSigningKey {
+    /// 法（modulus）の base64（大端バイト列）。
+    pub modulus_b64: String,
+    /// 指数（exponent）の base64（大端バイト列）。
+    pub exponent_b64: String,
+}
+
+/// 本 IdP の SAML `EntityDescriptor`（`IDPSSODescriptor`）XML を生成する。
 ///
-/// `entity_id` は SP のエンティティ ID（テナント issuer を用いる）、`acs_url` は AssertionConsumerService
-/// の URL。現時点では署名鍵（`KeyDescriptor`）は含めない（アサーション受信フローの導入時に追加する）。
-pub fn build_sp_metadata_xml(entity_id: &str, acs_url: &str) -> String {
+/// `entity_id` は IdP のエンティティ ID（テナント issuer を用いる）、`sso_url` は SingleSignOnService の
+/// URL。`signing_key` があれば署名用 `KeyDescriptor`（`RSAKeyValue`）を含める。SP（クライアント）は
+/// この metadata を取り込んで本 IdP を信頼する。
+pub fn build_idp_metadata_xml(
+    entity_id: &str,
+    sso_url: &str,
+    signing_key: Option<&IdpSigningKey>,
+) -> String {
     let entity_id = escape(entity_id);
-    let acs_url = escape(acs_url);
+    let sso_url = escape(sso_url);
+    let key_descriptor = match signing_key {
+        Some(key) => format!(
+            r#"
+    <md:KeyDescriptor use="signing">
+      <ds:KeyInfo xmlns:ds="http://www.w3.org/2000/09/xmldsig#">
+        <ds:KeyValue>
+          <ds:RSAKeyValue>
+            <ds:Modulus>{}</ds:Modulus>
+            <ds:Exponent>{}</ds:Exponent>
+          </ds:RSAKeyValue>
+        </ds:KeyValue>
+      </ds:KeyInfo>
+    </md:KeyDescriptor>"#,
+            escape(&key.modulus_b64),
+            escape(&key.exponent_b64),
+        ),
+        None => String::new(),
+    };
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <md:EntityDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata" entityID="{entity_id}">
-  <md:SPSSODescriptor AuthnRequestsSigned="false" WantAssertionsSigned="true" protocolSupportEnumeration="urn:oasis:names:tc:SAML:2.0:protocol">
+  <md:IDPSSODescriptor WantAuthnRequestsSigned="false" protocolSupportEnumeration="urn:oasis:names:tc:SAML:2.0:protocol">{key_descriptor}
     <md:NameIDFormat>urn:oasis:names:tc:SAML:2.0:nameid-format:persistent</md:NameIDFormat>
     <md:NameIDFormat>urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress</md:NameIDFormat>
-    <md:AssertionConsumerService Binding="{BINDING_HTTP_POST}" Location="{acs_url}" index="0" isDefault="true"/>
-  </md:SPSSODescriptor>
+    <md:SingleSignOnService Binding="{BINDING_HTTP_REDIRECT}" Location="{sso_url}"/>
+    <md:SingleSignOnService Binding="{BINDING_HTTP_POST}" Location="{sso_url}"/>
+  </md:IDPSSODescriptor>
 </md:EntityDescriptor>
 "#
     )
@@ -349,17 +381,38 @@ mod tests {
     }
 
     #[test]
-    fn build_sp_metadata_contains_entity_id_and_acs_and_escapes() {
-        let xml = build_sp_metadata_xml(
+    fn build_idp_metadata_contains_idp_descriptor_sso_and_signing_key() {
+        let key = IdpSigningKey {
+            modulus_b64: "AQABmodulus==".to_string(),
+            exponent_b64: "AQAB".to_string(),
+        };
+        let xml = build_idp_metadata_xml(
             "https://idp.example.com/tenant-1",
-            "https://idp.example.com/tenant-1/saml/acs?x=1&y=2",
+            "https://idp.example.com/tenant-1/saml/sso?x=1&y=2",
+            Some(&key),
         );
         assert!(xml.contains(r#"entityID="https://idp.example.com/tenant-1""#));
-        assert!(xml.contains("urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST"));
+        // IdP メタデータ（IDPSSODescriptor）であり、SP メタデータではない。
+        assert!(xml.contains("IDPSSODescriptor"));
+        assert!(!xml.contains("SPSSODescriptor"));
+        assert!(xml.contains("<md:SingleSignOnService"));
+        assert!(!xml.contains("AssertionConsumerService"));
+        // 署名鍵は RSAKeyValue で埋め込まれる。
+        assert!(xml.contains(r#"<md:KeyDescriptor use="signing">"#));
+        assert!(xml.contains("<ds:Modulus>AQABmodulus==</ds:Modulus>"));
+        assert!(xml.contains("<ds:Exponent>AQAB</ds:Exponent>"));
         // クエリの `&` は属性値としてエスケープされる。
-        assert!(xml.contains("saml/acs?x=1&amp;y=2"));
-        assert!(!xml.contains("acs?x=1&y=2"));
+        assert!(xml.contains("saml/sso?x=1&amp;y=2"));
         // 生成した XML は再パース可能（整形式）である。
+        let mut reader = Reader::from_str(&xml);
+        while !matches!(reader.read_event().expect("well-formed"), Event::Eof) {}
+    }
+
+    #[test]
+    fn build_idp_metadata_omits_key_descriptor_when_no_signing_key() {
+        let xml = build_idp_metadata_xml("urn:idp", "https://idp.test/sso", None);
+        assert!(xml.contains("IDPSSODescriptor"));
+        assert!(!xml.contains("KeyDescriptor"));
         let mut reader = Reader::from_str(&xml);
         while !matches!(reader.read_event().expect("well-formed"), Event::Eof) {}
     }

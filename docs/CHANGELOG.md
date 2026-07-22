@@ -1,4 +1,13 @@
 
+## 2026-07-22（SAML: メタデータ出力を IdP メタデータへ修正）
+
+- **crates/core・api・web — SAML メタデータ出力を SP → IdP メタデータへ修正**: 本プロダクトは IdP のため、
+  `GET /{tenant_id}/saml/metadata` は `SPSSODescriptor` ではなく `IDPSSODescriptor` を返すべきだった。
+  `EntityDescriptor`（`IDPSSODescriptor`）を生成する `build_idp_metadata_xml` に置き換え、SSO
+  エンドポイント（`{issuer}/saml/sso`）と ACTIVE 署名鍵（RSA を `RSAKeyValue` で埋め込み。JWKS の
+  `n`/`e` を base64 変換）を含めるようにした。ダウンロード導線の文言も「IdP メタデータ」へ修正。
+  外部 IdP メタデータの取り込み（`/admin/saml` の連携登録）は従来どおり。
+
 ## 2026-07-22（デプロイ: 一ホスト方式 build-remote.sh を追加）
 
 - **scripts — `build-remote.sh` を追加**: デプロイ先で git 取得 → 自己更新 → `build.sh` →
