@@ -388,30 +388,44 @@ sync_root_tenant_id_env() {
 # この不一致は検出できず、意味のない migrate リトライ 3 回で終わる。migration の前にアプリ用ユーザーで
 # 実際に認証できるかを確認し、不一致なら原因と対処を明示して即座に停止する（fail-fast）。
 preflight_db_auth() {
-  local db_user db_name db_password attempt err_out
-  db_user="$(get_env_var MARIADB_USER)"; db_user="${db_user:-idp}"
-  db_name="$(get_env_var MARIADB_DATABASE)"; db_name="${db_name:-idp}"
-  db_password="$(get_env_var MARIADB_PASSWORD)"
+  local db_user db_name db_password attempt err_out auth_denied=0
+  # 資格情報は Compose と同じ解決順（エクスポート済みシェル環境変数 > .env ファイル値）で読む。
+  # Compose は ${MARIADB_PASSWORD} をシェル環境変数から先に補間するため、ここも同じ実効値を使わないと
+  # 「Compose/migrate は有効なのにプリフライトだけ弾く／その逆」の食い違いが起きる。
+  db_user="${MARIADB_USER:-$(get_env_var MARIADB_USER)}"; db_user="${db_user:-idp}"
+  db_name="${MARIADB_DATABASE:-$(get_env_var MARIADB_DATABASE)}"; db_name="${db_name:-idp}"
+  db_password="${MARIADB_PASSWORD:-$(get_env_var MARIADB_PASSWORD)}"
   log "DB 認証プリフライトを実行します（アプリ用ユーザー $db_user）..."
   for attempt in 1 2 3; do
-    # root_tenant_id() と同じ接続方式でアプリ用ユーザーの認証可否だけを確認する。
+    # migrate と同じ TCP 経路で試す（-h mariadb でコンテナ IP から接続＝ '%' ホスト定義にマッチ）。
+    # ソケット（-h 省略＝localhost）だと host 別アカウント（'user'@'localhost'）がある環境で
+    # migrate と別のアカウントを検証してしまうため、ホスト一致まで揃える。
     # 認証エラーはパスワード不一致なので即断（リトライしない）。それ以外の一過性の失敗のみ短く再試行する。
     if err_out="$("${compose[@]}" exec -T mariadb \
-        mariadb -u"$db_user" -p"$db_password" "$db_name" -N -B -e 'SELECT 1' 2>&1)"; then
+        mariadb -h mariadb -u"$db_user" -p"$db_password" "$db_name" -N -B -e 'SELECT 1' 2>&1)"; then
       log "DB 認証プリフライト OK（ユーザー $db_user）。"
       return 0
     fi
-    printf '%s' "$err_out" | grep -qi 'access denied' && break
+    if printf '%s' "$err_out" | grep -qi 'access denied'; then auth_denied=1; break; fi
+    auth_denied=0
     [[ $attempt -lt 3 ]] && sleep 2
   done
   compose_diagnostics_for mariadb
-  err "アプリ用 DB ユーザー '$db_user' で認証できません（.env の MARIADB_PASSWORD が既存の DB volume と不一致）。"
-  err "MariaDB は data volume を初回作成時のパスワードで固定し、その後の .env 変更を反映しません。"
-  err "対処のいずれか:"
-  err "  * データを破棄してよい（初期構築・staging 等）: ./deploy.sh reset で DB volume を作り直す（既存データは消えます）"
-  err "  * データを保持したい: .env の MARIADB_PASSWORD を volume 作成時の値へ戻す"
-  err "    （または root で ALTER USER '$db_user'@'%' IDENTIFIED BY ... を実行してパスワードを揃える）"
-  die "DB authentication preflight failed"
+  # 認証失敗（パスワード drift）のときだけ破壊的な reset を提案する。認証以外（DB 不在・権限・
+  # ネットワーク障害等）で reset を勧めると誤って既存データを消しかねないため、診断を分ける。
+  if [[ $auth_denied -eq 1 ]]; then
+    err "アプリ用 DB ユーザー '$db_user' で認証できません（.env の MARIADB_PASSWORD が既存の DB volume と不一致）。"
+    err "MariaDB は data volume を初回作成時のパスワードで固定し、その後の .env 変更を反映しません。"
+    err "対処のいずれか:"
+    err "  * データを破棄してよい（初期構築・staging 等）: ./deploy.sh reset で DB volume を作り直す（既存データは消えます）"
+    err "  * データを保持したい: .env の MARIADB_PASSWORD を volume 作成時の値へ戻す"
+    err "    （または root で ALTER USER '$db_user'@'%' IDENTIFIED BY ... を実行してパスワードを揃える）"
+    die "DB authentication preflight failed"
+  fi
+  err "DB 認証プリフライトが認証以外の理由で失敗しました（ユーザー '$db_user'・DB '$db_name'）。"
+  err "接続経路・DB の存在・権限・一時的なネットワーク障害を確認してください（詳細は上の mariadb ログと下の出力）。"
+  printf '%s\n' "$err_out" | mask_secrets >&2
+  die "DB preflight failed (non-authentication error)"
 }
 
 start_database() {
