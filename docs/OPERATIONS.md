@@ -309,6 +309,55 @@ cd /opt/idp        # build-remote.sh を置いた場所（例）
 `IDP_REPO_URL` / `IDP_BRANCH` / `IDP_SRC_DIR` で変更できる。前提: `git`・`docker`・`openssl`。
 詳細は `scripts/README.md`。
 
+## デプロイ先に git が無いとき（dev コンテナでビルド → 取り込み → デプロイ）
+
+Synology DSM のようにデプロイ先へ直接 git を入れられない場合は、**ビルドを dev コンテナ内で
+行い**、生成した `dist/` をデプロイ先へ取り込む `build-remote-container.sh` を使う。3 ステップ
+（BUILD → PICK → DEPLOY）を 1 本で実行する（旧来の別 `pick.sh` は本スクリプトへ統合済み）。
+
+前提: デプロイ先で Docker が動くこと。git・ツールチェーンを持つ dev コンテナ（例 `ubuntu-dev`）が
+起動し、その中にリポジトリ（`scripts/build.sh` がある working dir）があること。コンテナの
+ワークスペースがホストから見えており、`dist/` の場所を絶対パスで指せること。
+
+**初回だけの手順（git 不要。ファイル配置のみ）**
+
+1. デプロイ先ディレクトリ（例 `/volume1/docker/idp/stg`）へ、リポジトリの
+   `scripts/build-remote-container.sh` を 1 回コピーして実行権を付ける。ホストから見える
+   コンテナ内リポジトリのパスから直接コピーできる。
+
+   ```sh
+   cp /var/services/homes/<you>/.../work/project/<proj>/scripts/build-remote-container.sh \
+      /volume1/docker/idp/stg/
+   chmod +x /volume1/docker/idp/stg/build-remote-container.sh
+   ```
+
+2. 環境変数で自分の構成を指す（スクリプト冒頭の既定値を書き換えても、実行時に指定してもよい）。
+   **`IDP_DIST_DIR`（ホストから見えるビルド済み `dist/` の絶対パス）は必須**。
+
+   ```sh
+   export IDP_DEV_CONTAINER=ubuntu-dev            # ビルドを行う dev コンテナ名
+   export IDP_DEV_USER=sshuser                    # コンテナ内の実行ユーザー
+   export IDP_DEV_WORKDIR=/work/project/<proj>    # コンテナ内のリポジトリ working dir
+   export IDP_DIST_DIR=/var/services/homes/<you>/.../work/project/<proj>/dist
+   ```
+
+3. `.env` は最小設定でよい。初回実行で `deploy.sh` が `.env.example` から `.env` を自動生成し、
+   秘密情報（`KEY_ENCRYPTION_KEY`・DB パスワード・`CSRF_SECRET` 等）を乱数生成する。生成後、
+   デプロイ先の `.env` で **`ISSUER`（公開 URL）と `WEB_PORT`（公開ポート）** の 2 つだけ環境に
+   合わせて確認・編集し、もう一度実行する。
+
+**以後の運用（自動）**
+
+```sh
+cd /volume1/docker/idp/stg
+./build-remote-container.sh migrate    # BUILD（コンテナ内 git pull → build.sh）→ PICK → deploy.sh migrate
+./build-remote-container.sh app        # 通常デプロイ
+```
+
+`.env` は初回生成後は**上書きしない**（秘密情報は不変。DB・暗号化署名鍵を保全）。バージョン更新で
+`.env.example` に増えた**設定キーだけ**は `deploy.sh` が既存 `.env` へ自動追記する（既存値・秘密は
+不変。`COMPOSE_PROJECT_NAME` は volume 保護のため対象外）。個別の値を変えたいときは `.env` を手編集する。
+
 ## マイグレーションだけを適用したいとき（デプロイ先）
 
 ```sh

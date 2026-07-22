@@ -171,9 +171,39 @@ set_env_var() {
   mv "$tmp" "$env_file"
 }
 
+# 既存 .env に、`.env.example` にあって不足している「設定キー」だけを追記する（バージョン更新で
+# 増えたキーへ自動追随）。既存の値は一切書き換えない（秘密・手編集を保全）。次は対象外:
+#   * 秘密情報（example 値が CHANGE-ME）。誤って空/プレースホルダで上書きしないため。
+#   * 値が空のキー（ROOT_TENANT_ID 等。deploy.sh が別途設定する）。
+#   * COMPOSE_PROJECT_NAME（volume 名前空間。誤って別 volume を指すと破損するため既存挙動を維持）。
+merge_missing_env_keys() {
+  [[ -f "$example_file" ]] || return 0
+  local line key value added=0
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ "$line" == \#* ]] && continue
+    [[ "$line" == *=* ]] || continue
+    key="${line%%=*}"
+    value="${line#*=}"
+    key="${key//[[:space:]]/}"
+    [[ -n "$key" ]] || continue
+    [[ "$key" == COMPOSE_PROJECT_NAME ]] && continue
+    [[ -z "$value" || "$value" == *CHANGE-ME* ]] && continue
+    grep -qE "^[[:space:]]*${key}=" "$env_file" && continue
+    # 追記前に末尾改行を保証する。手編集で末尾改行の無い .env でも、最終行の値へ連結して
+    # 壊さないようにする（例: `FOO=bar` + `LOG_FORMAT=pretty` → `FOO=barLOG_FORMAT=...` を防ぐ）。
+    if [[ -s "$env_file" && -n "$(tail -c1 "$env_file")" ]]; then printf '\n' >>"$env_file"; fi
+    printf '%s\n' "$line" >>"$env_file"
+    added=$((added + 1))
+  done <"$example_file"
+  [[ $added -gt 0 ]] &&
+    log ".env に不足していた設定キー ${added} 個を .env.example から追記しました（既存値・秘密は不変）。"
+  return 0
+}
+
 ensure_env_file() {
   if [[ -f "$env_file" ]]; then
     log "既存の .env を使用します（上書きしません）。"
+    merge_missing_env_keys
     if [[ -z "$(get_env_var COMPOSE_PROJECT_NAME)" ]]; then
       LEGACY_COMPOSE_PROJECT_NAME="$(legacy_compose_project_name)"
       warn "既存 .env に COMPOSE_PROJECT_NAME が無いため、既存 volume を保護するため従来の Compose project name ($LEGACY_COMPOSE_PROJECT_NAME) を使用します。変更する場合は volume 移行または reset 後に .env へ明示してください。"
