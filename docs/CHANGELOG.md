@@ -1,3 +1,4 @@
+
 ## 2026-07-22（デプロイ: 一ホスト方式 build-remote.sh を追加）
 
 - **scripts — `build-remote.sh` を追加**: デプロイ先で git 取得 → 自己更新 → `build.sh` →
@@ -8,6 +9,13 @@
   （`build.sh` → `dist/` 転送 → `deploy.sh`）はそのまま利用できる。
 - **CI — `scripts/test_build_remote.sh` を追加**: 実物の git（ローカル origin を clone）と
   スタブ化した `build.sh` / `deploy.sh` / `docker` で、取得・自己更新・モード委譲・再実行ループ非発生を検証する。
+
+## 2026-07-22（デプロイ: 既定の外部公開ポートを stg 8061 / prod 8060 に統一）
+
+- **env サンプル・OPERATIONS — 同一ホスト運用の既定 WEB_PORT を整理**: staging の外部公開ポートを
+  `8081` から `8061` に変更し（`.env.staging.example` の `ISSUER`／`PUBLIC_WEB_BASE_URL`／`WEB_PORT`）、
+  production は従来どおり `8060`。`docs/OPERATIONS.md` の stg/prod デプロイ表も stg `8061` / prod `8060` に
+  そろえた（コンテナ内ポートは常に `8080` のまま。外部公開ポートのみ変更）。
 
 ## 2026-07-22（SAML: SP メタデータ出力・外部 IdP メタデータ取り込み）
 
