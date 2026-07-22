@@ -178,10 +178,3 @@ pub struct AdminSamlServiceProviderForm {
     pub enabled: Option<String>,
     pub csrf_token: String,
 }
-
-/// SP メタデータ取り込みフォーム（`POST /{tenant_id}/admin/saml-clients/import`）。
-#[derive(Debug, Deserialize)]
-pub struct AdminSamlSpMetadataImportForm {
-    pub metadata_xml: String,
-    pub csrf_token: String,
-}

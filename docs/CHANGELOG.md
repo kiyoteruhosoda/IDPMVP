@@ -1,4 +1,33 @@
 
+## 2026-07-22（SAML: SP 登録メタデータのファイルアップロード対応）
+
+- **crates/web — SP（クライアント）登録のメタデータ取り込みをファイルアップロードにも対応**: 管理コンソール
+  （`/{tenant_id}/admin/saml-clients`）の取り込みフォームを `multipart/form-data` にし、`.xml` ファイルの
+  アップロード（`metadata_file`）を追加。従来の貼り付け（`metadata_xml`）も維持し、両方あればファイルを優先する。
+  ハンドラは multipart を読み、UTF-8・サイズ上限（1 MiB）を検証してから既存の取り込み API へ委譲する。
+  axum の `multipart` feature を web crate に追加。i18n（en/ja）にファイル項目のラベル・ヒントを追加。
+
+## 2026-07-22（デプロイ: ディレクトリ名で stg/prod の .env を初回自動選択）
+
+- **scripts — 初回 `.env` 生成をデプロイディレクトリ名から判定**: デプロイ先ディレクトリ名が `stg`/`staging`/
+  `*-stg`（または `prod`/`production`/`*-prod`）のとき、`deploy.sh` は初回 `.env` を汎用 `.env.example` ではなく
+  `.env.staging.example` / `.env.production.example` から生成し、秘密（`CHANGE-ME`）を乱数化する。DB URL の
+  host:port（stg=3307/prod=3306）はテンプレートを保持し `CHANGE-ME` のみ置換。`build-remote-container.sh` も
+  同規則で初回ビルドタグ（`stg`/`prod`）を決め、「`latest` でビルド → `.env` は stg を要求 → イメージ不一致」を防ぐ。
+  該当しない名前は従来どおり汎用 `.env.example`（8060/latest）へフォールバック。`test_deploy.sh` に stg 選択の
+  ケースを追加。
+
+## 2026-07-22（SAML: IdP メタデータの Content-Type を application/xml に変更）
+
+- **crates/api — `GET /{tenant_id}/saml/metadata` の Content-Type を `application/samlmetadata+xml`
+  から `application/xml; charset=utf-8` に変更**（`Content-Disposition: attachment` は維持）。
+  ほぼ未登録の `application/samlmetadata+xml` では Android の DownloadManager が保存ファイルの MIME を
+  焼き付け、開けるアプリが無く「テキストとして認識されない／開けない」状態になっていた。生成 XML 自体は
+  整形式で不変（変更は Content-Type ヘッダのみ）。
+- **scripts/README.md — 基準ディレクトリ解決の説明を修正**: 「どのディレクトリから実行しても動く」が
+  stg/prod の取り違え（`cd stg` しても本番 `.env` が使われる）を招いていた。基準は `$PWD` ではなく
+  スクリプト実体の置き場所（または `IDP_TARGET_DIR`）で決まる旨と、stg/prod を同一ホストで分ける手順を明記。
+
 ## 2026-07-22（SAML: 外部 IdP 連携（本製品を SP とする機能）を廃止）
 
 - **crates/core・api・web — 外部 SAML IdP 連携を削除**: 本プロダクトは IdP であり、他 IdP に依存

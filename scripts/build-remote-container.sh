@@ -121,9 +121,19 @@ read_env_value() {
   # キーが無ければ空を返す。set -o pipefail 下でも grep の不一致(1)で落ちないよう `|| true`。
   { grep -E "^${key}=" "$target_dir/.env" | tail -n1 | cut -d= -f2- | tr -d '\r'; } || true
 }
+# ターゲットディレクトリ名から既定タグを判定する。初回（.env 未生成）でも stg/prod ディレクトリなら
+# deploy.sh がそのディレクトリの .env.<env>.example から生成する IMAGE_TAG（stg/prod）とビルドタグを
+# 一致させ、「latest でビルド → .env は stg を要求 → イメージ不一致」を防ぐ。
+image_tag_from_target_dir() {
+  case "$(basename "$target_dir")" in
+    stg | staging | *-stg | *-staging) printf 'stg\n' ;;
+    prod | production | *-prod | *-production) printf 'prod\n' ;;
+    *) printf 'latest\n' ;;
+  esac
+}
 image_tag="${IMAGE_TAG:-$(read_env_value IMAGE_TAG)}"
 image_prefix="${IMAGE_PREFIX:-$(read_env_value IMAGE_PREFIX)}"
-image_tag="${image_tag:-latest}"
+image_tag="${image_tag:-$(image_tag_from_target_dir)}"
 image_prefix="${image_prefix:-idp}"
 
 # --- BUILD（dev コンテナ内で git pull → build.sh） ------------------------------
