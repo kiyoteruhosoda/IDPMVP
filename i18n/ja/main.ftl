@@ -485,10 +485,42 @@ password-visibility-hide = パスワードを隠す
 admin-profile-settings = プロフィール設定を開く
 admin-saml-error-conflict = 同じ Entity ID の SAML 連携が既に登録されています。
 
-# SAML メタデータ取り込み（外部 IdP）と SP メタデータ出力。
-admin-saml-sp-metadata-download = SP メタデータをダウンロード
+# SAML メタデータ取り込み（外部 IdP）と自身の IdP メタデータ出力。
+admin-saml-idp-metadata-download = IdP メタデータをダウンロード
 admin-saml-import-field = IdP メタデータ XML
 admin-saml-import-hint = 外部 IdP の SAML メタデータ（EntityDescriptor）を貼り付けると、下のフォームに自動入力します。
 admin-saml-import-button = メタデータから取り込む
 admin-saml-imported = メタデータから値を取り込みました。内容を確認して登録してください。
 admin-saml-error-import = SAML メタデータを解析できませんでした。IdP の EntityDescriptor XML であることを確認してください。
+
+# SAML SP（クライアント）登録（管理コンソール）。
+admin-nav-saml-clients = SAML クライアント (SP)
+admin-nav-saml-clients-desc = この IdP を信頼する SAML サービスプロバイダ（クライアント）を登録します。
+admin-saml-client-title = SAML クライアント (SP)
+admin-saml-client-lead = この IdP を利用する SAML サービスプロバイダ（クライアント）を登録し、アサーションの送信先（ACS）を管理します。
+admin-saml-client-saved = SAML クライアントを追加しました。
+admin-saml-client-add = SAML クライアントを追加
+admin-saml-client-add-close = 閉じる
+admin-saml-client-create-title = 新規 SAML クライアント
+admin-saml-client-list-title = 登録済み SAML クライアント
+admin-saml-client-list-empty = まだ SAML クライアントが登録されていません。「SAML クライアントを追加」から最初のクライアントを登録してください。
+admin-saml-client-col-status = 状態
+admin-saml-client-enabled-on = 有効
+admin-saml-client-enabled-off = 無効
+admin-saml-client-field-display-name = 表示名
+admin-saml-client-field-entity-id = Entity ID
+admin-saml-client-field-acs-url = Assertion Consumer Service (ACS) URL
+admin-saml-client-field-name-id-format = NameID フォーマット
+admin-saml-client-name-id-format-hint = 空欄の場合は persistent 形式を使用します。
+admin-saml-client-field-certificate = X.509 証明書（任意）
+admin-saml-client-certificate-hint = SP が AuthnRequest に署名する場合はその署名証明書を貼り付けてください。任意です。
+admin-saml-client-field-enabled = このクライアントを有効にする
+admin-saml-client-submit = SAML クライアントを追加
+admin-saml-client-import-field = SP メタデータ XML
+admin-saml-client-import-hint = サービスプロバイダの SAML メタデータ（SPSSODescriptor を含む EntityDescriptor）を貼り付けると、下のフォームに自動入力します。
+admin-saml-client-import-button = メタデータから取り込む
+admin-saml-client-imported = メタデータから値を取り込みました。内容を確認して登録してください。
+admin-saml-client-error-validation = 必須項目を入力してください。
+admin-saml-client-error-acs-url = ACS URL は HTTPS または localhost を指定してください。
+admin-saml-client-error-conflict = 同じ Entity ID の SAML クライアントが既に登録されています。
+admin-saml-client-error-import = SP メタデータを解析できませんでした。SP の EntityDescriptor XML であることを確認してください。
