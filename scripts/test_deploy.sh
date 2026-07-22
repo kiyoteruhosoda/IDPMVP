@@ -102,6 +102,17 @@ if grep -q '^COMPOSE_PROJECT_NAME=' .env; then
   exit 1
 fi
 
+# バージョン更新で増えた「設定キー（非秘密）」は既存 .env へ自動追記される（秘密・既存値は不変）。
+sed -i '/^LOG_FORMAT=/d' .env
+: >"$DOCKER_STUB_LOG"
+./scripts/deploy.sh app >/tmp/deploy-merge.out 2>&1
+grep -q '^LOG_FORMAT=pretty$' .env || { echo "missing non-secret key should be appended from .env.example" >&2; exit 1; }
+# プレースホルダ（CHANGE-ME）の秘密値が代入行として追記で混入しないこと（コメント中の語は無視）。
+if grep -qE '^[A-Za-z_][A-Za-z0-9_]*=.*CHANGE-ME' .env; then
+  echo "merge must not inject CHANGE-ME placeholder values into .env" >&2
+  exit 1
+fi
+
 set +e
 DOCKER_STUB_FAIL_MIGRATE=1 ./scripts/deploy.sh migrate >/tmp/deploy-migrate-fail.out 2>&1
 status=$?

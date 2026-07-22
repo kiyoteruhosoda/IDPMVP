@@ -17,7 +17,8 @@
 |---|---|
 | `build.sh` | **ビルド側**: Docker イメージ（api/web/migrate）をビルドし、tar ＋ デプロイ一式を `dist/` へ出力 |
 | `deploy.sh` | **デプロイ先**: デプロイの単一入口（初回・更新・migrate・reset）。`dist/` に同梱される |
-| `build-remote.sh` | **デプロイ先（一ホスト方式）**: git 取得 → 自己更新 → `build.sh` → `deploy.sh` を 1 本で実行。dist/ の転送が不要 |
+| `build-remote.sh` | **デプロイ先（一ホスト方式・git あり）**: git 取得 → 自己更新 → `build.sh` → `deploy.sh` を 1 本で実行。dist/ の転送が不要 |
+| `build-remote-container.sh` | **デプロイ先（一ホスト方式・git 無し）**: dev コンテナ内で `git pull` → `build.sh` → 生成 `dist/` を取り込み → `deploy.sh` を 1 本で実行。Synology 等 git 非搭載向け（旧 `pick.sh` を統合） |
 | `e2e.sh` | web→api の疎通 E2E（api・web を実プロセス起動して HTTP で検証） |
 | `test_deploy.sh` | `deploy.sh` の CLI/エラー処理をスタブ docker で検証（CI 用） |
 | `test_build_remote.sh` | `build-remote.sh` の取得・自己更新・委譲をスタブで検証（CI 用） |
