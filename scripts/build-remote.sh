@@ -54,10 +54,20 @@ command -v docker >/dev/null 2>&1 || die "docker が見つかりません。"
 fetch_source() {
   if [[ -d "$src_dir/.git" ]]; then
     log "ソースを更新します: $src_dir (branch=$branch)"
+    # IDP_REPO_URL の変更（fork/mirror → 本番リポジトリ切替など）に追従。既存 clone の
+    # 古い origin を使い続けて誤ったリポジトリからデプロイしないよう、取得前に URL を合わせる。
+    if git -C "$src_dir" remote get-url origin >/dev/null 2>&1; then
+      git -C "$src_dir" remote set-url origin "$repo_url"
+    else
+      git -C "$src_dir" remote add origin "$repo_url"
+    fi
     git -C "$src_dir" fetch --depth 1 origin "$branch"
     git -C "$src_dir" reset --hard FETCH_HEAD
   else
-    [[ -e "$src_dir" && ! -d "$src_dir/.git" ]] && die "$src_dir が git リポジトリではありません。IDP_SRC_DIR を見直すか、空のディレクトリを指定してください。"
+    # 既存ディレクトリでも空なら git clone できる。非空かつ非 git のときだけ拒否する。
+    if [[ -e "$src_dir" && -n "$(ls -A "$src_dir" 2>/dev/null)" ]]; then
+      die "$src_dir は git リポジトリではなく空でもありません。IDP_SRC_DIR を見直すか、空のディレクトリを指定してください。"
+    fi
     log "ソースを取得します: $repo_url → $src_dir (branch=$branch)"
     git clone --depth 1 --branch "$branch" "$repo_url" "$src_dir"
   fi

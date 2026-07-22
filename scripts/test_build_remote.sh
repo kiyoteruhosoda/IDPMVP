@@ -78,10 +78,42 @@ fi
 grep -q 'ソースを更新します' "$TMP/run2.out" || { echo "既存 clone の更新（fetch）が行われていません" >&2; cat "$TMP/run2.out" >&2; exit 1; }
 grep -q 'DEPLOY-STUB mode=migrate' "$BUILD_REMOTE_TEST_LOG" || { echo "deploy.sh が migrate で呼ばれていません" >&2; exit 1; }
 
-# --- 3) 不明モードは失敗する ------------------------------------------------------------
-if "$host/build-remote.sh" bogus >"$TMP/run3.out" 2>&1; then
+# --- 3) IDP_REPO_URL 変更に追従（既存 clone の origin を差し替えて取得する） -------------
+origin2="$TMP/origin2"
+cp -a "$origin" "$origin2"
+printf 'origin2\n' >"$origin2/MARKER"
+git -C "$origin2" add -A
+git -C "$origin2" commit -qm "origin2 marker"
+: >"$BUILD_REMOTE_TEST_LOG"
+IDP_REPO_URL="$origin2" "$host/build-remote.sh" app >"$TMP/run3.out" 2>&1 \
+  || { echo "IDP_REPO_URL 変更後の実行に失敗しました" >&2; cat "$TMP/run3.out" >&2; exit 1; }
+[[ -f "$host/src/MARKER" ]] || { echo "origin 差し替えが反映されていません（新リポジトリから取得できていない）" >&2; exit 1; }
+
+# --- 4) 既存の空ディレクトリへは clone できる（非空・非 git のときだけ拒否） -----------------
+host2="$TMP/host2"
+mkdir -p "$host2/src"   # 事前に空の取得先が用意されているケース
+cp "$ROOT/scripts/build-remote.sh" "$host2/build-remote.sh"
+chmod +x "$host2/build-remote.sh"
+: >"$BUILD_REMOTE_TEST_LOG"
+IDP_SRC_DIR="$host2/src" "$host2/build-remote.sh" app >"$TMP/run4.out" 2>&1 \
+  || { echo "空ディレクトリへの clone に失敗しました" >&2; cat "$TMP/run4.out" >&2; exit 1; }
+[[ -d "$host2/src/.git" ]] || { echo "空ディレクトリへ clone されていません" >&2; exit 1; }
+
+# 非空かつ非 git の取得先は拒否する。
+host3="$TMP/host3"
+mkdir -p "$host3/src"
+touch "$host3/src/stray-file"
+cp "$ROOT/scripts/build-remote.sh" "$host3/build-remote.sh"
+chmod +x "$host3/build-remote.sh"
+if IDP_SRC_DIR="$host3/src" "$host3/build-remote.sh" app >"$TMP/run5.out" 2>&1; then
+  echo "非空・非 git の取得先は拒否すべきです" >&2; exit 1
+fi
+grep -q '空でもありません' "$TMP/run5.out" || { echo "非空取得先のエラーメッセージがありません" >&2; cat "$TMP/run5.out" >&2; exit 1; }
+
+# --- 5) 不明モードは失敗する ------------------------------------------------------------
+if "$host/build-remote.sh" bogus >"$TMP/run6.out" 2>&1; then
   echo "不明モードは失敗すべきです" >&2; exit 1
 fi
-grep -q '不明なモード' "$TMP/run3.out" || { echo "不明モードのエラーメッセージがありません" >&2; exit 1; }
+grep -q '不明なモード' "$TMP/run6.out" || { echo "不明モードのエラーメッセージがありません" >&2; exit 1; }
 
 echo "build-remote script tests passed"
