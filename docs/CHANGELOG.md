@@ -1,4 +1,14 @@
 
+## 2026-07-22（デプロイ: ディレクトリ名で stg/prod の .env を初回自動選択）
+
+- **scripts — 初回 `.env` 生成をデプロイディレクトリ名から判定**: デプロイ先ディレクトリ名が `stg`/`staging`/
+  `*-stg`（または `prod`/`production`/`*-prod`）のとき、`deploy.sh` は初回 `.env` を汎用 `.env.example` ではなく
+  `.env.staging.example` / `.env.production.example` から生成し、秘密（`CHANGE-ME`）を乱数化する。DB URL の
+  host:port（stg=3307/prod=3306）はテンプレートを保持し `CHANGE-ME` のみ置換。`build-remote-container.sh` も
+  同規則で初回ビルドタグ（`stg`/`prod`）を決め、「`latest` でビルド → `.env` は stg を要求 → イメージ不一致」を防ぐ。
+  該当しない名前は従来どおり汎用 `.env.example`（8060/latest）へフォールバック。`test_deploy.sh` に stg 選択の
+  ケースを追加。
+
 ## 2026-07-22（SAML: IdP メタデータの Content-Type を application/xml に変更）
 
 - **crates/api — `GET /{tenant_id}/saml/metadata` の Content-Type を `application/samlmetadata+xml`

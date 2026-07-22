@@ -81,20 +81,28 @@ dist/
 └── prod/   deploy.sh + build-remote-container.sh + build-remote-container.env + .env  # COMPOSE_PROJECT_NAME=idp-prod
 ```
 
-**各環境ディレクトリで必要な設定（省くと起動しない）**:
+**ディレクトリ名で環境を自動判定する。** ディレクトリ名が `stg`/`staging`/`*-stg`（stg 系）または
+`prod`/`production`/`*-prod`（prod 系）なら、初回の `.env` 未作成時に **`deploy.sh` がそのディレクトリの
+`.env.staging.example` / `.env.production.example` を生成元に選び**（`WEB_PORT`・`IMAGE_TAG`・
+`COMPOSE_PROJECT_NAME` が環境ごとに分離済み）、秘密情報（`CHANGE-ME`）は乱数で自動生成する。
+`build-remote-container.sh` も同じ規則で初回のビルドタグ（`stg`/`prod`）を決めるため、
+「`latest` でビルド → `.env` は `stg` を要求 → イメージ不一致」は起きない。上記に当てはまらない名前の
+ディレクトリは汎用 `.env.example`（`WEB_PORT=8060`・`IMAGE_TAG=latest`）にフォールバックする。
 
-1. **`.env`**: `.env.staging.example` / `.env.production.example` をコピーする。この example は
-   `ISSUER`・`WEB_PORT`・`IMAGE_TAG`・`COMPOSE_PROJECT_NAME` を stg/prod で分けて設定済みだが、
-   **秘密情報（`MARIADB_PASSWORD`・`MARIADB_ROOT_PASSWORD`・`DATABASE_URL` のパスワード・
-   `KEY_ENCRYPTION_KEY`・`INTERNAL_SERVICE_TOKEN`・`CSRF_SECRET`）の `CHANGE-ME` を必ず実値に置換する**。
-   `deploy.sh` は既存 `.env` を上書きしない（`CHANGE-ME` のままでも秘密を生成しない）ため、置換前に
-   デプロイすると base64 として不正な `CHANGE-ME` を API/web が拒否して起動できない。あわせて `ISSUER` を
-   外部公開ホスト名/IP に合わせる。
-   - **⚠️ `.env` を先に作ること。** `.env` が無いまま `deploy.sh`/`build-remote-container.sh` を実行すると、
-     `deploy.sh` は `.env.staging/.production.example` ではなく**汎用 `.env.example`（既定 `WEB_PORT=8060`・
-     `IMAGE_TAG=latest`）**から `.env` を自動生成し、さらに `build-remote-container.sh` はタグを `.env` から
-     読めず `latest` でビルドするため、**stg のつもりが既定（本番相当）設定で起動する**。`COMPOSE_PROJECT_NAME`
-     はディレクトリ名から `idp-<dir>` に決まるので prod とは衝突しないが、ポート/タグ/ISSUER が既定値になる。
+```
+/opt/idp/
+├── stg/    …ディレクトリ名 stg → .env.staging.example から生成（COMPOSE_PROJECT_NAME=idp-stg, WEB_PORT=8061, IMAGE_TAG=stg）
+└── prod/   …ディレクトリ名 prod → .env.production.example から生成（COMPOSE_PROJECT_NAME=idp-prod, WEB_PORT=8060, IMAGE_TAG=prod）
+```
+
+**各環境ディレクトリで必要な設定**:
+
+1. **`.env.staging.example` / `.env.production.example`** をそのディレクトリに置く（`dist/` バンドルに同梱。
+   `build.sh` が出力する）。初回デプロイ時に `deploy.sh` がこれを生成元にして `.env` を作り、秘密を乱数生成する。
+   - デプロイ後、生成された `.env` の **`ISSUER`（既定 `http://localhost:<port>`）を外部公開ホスト名/IP に合わせる**。
+   - `.env` を**自分で先に作る**場合（`cp .env.staging.example .env`）は、`deploy.sh` が既存 `.env` を上書きせず
+     秘密も生成しないため、**`CHANGE-ME`（`MARIADB_PASSWORD`・`KEY_ENCRYPTION_KEY`・`INTERNAL_SERVICE_TOKEN`・
+     `CSRF_SECRET` 等）を必ず実値に置換する**。プレースホルダのままだと base64 不正で API/web が起動しない。
 2. **`build-remote-container.env`**（一ホスト方式のみ）: `IDP_DIST_DIR`（必須。ホストから見える
    ビルド済み `dist/` の絶対パス）等を書く。無いと `IDP_DIST_DIR` 未設定で `build-remote-container.sh` が
    即エラー終了する（`build-remote-container.sh:110`）。環境変数で `IDP_DIST_DIR=...` を直接渡してもよい。

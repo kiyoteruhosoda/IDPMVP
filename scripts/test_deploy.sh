@@ -175,4 +175,32 @@ fi
 grep -q 'load -i' "$DOCKER_STUB_LOG"
 grep -q 'image ID が manifest と不一致' /tmp/deploy-bundle-mismatch.out
 
+# --- stg ディレクトリでは初回 .env を .env.staging.example から生成する（ディレクトリ名で環境判定） ---
+mkdir -p "$TMP/stg/docker"
+cp "$ROOT/scripts/deploy.sh" "$TMP/stg/"
+cp "$ROOT/docker-compose.deploy.yml" "$TMP/stg/docker-compose.yml"
+cp "$ROOT/.env.example" "$ROOT/.env.staging.example" "$TMP/stg/"
+cp "$ROOT/docker/nginx.conf" "$TMP/stg/docker/"
+for svc in api web migrate; do
+  touch "$TMP/stg/idp-${svc}.tar"
+  printf '%s_ref=idp/%s:stg\n%s_image_id=sha256:stub-image-id\n' "$svc" "$svc" "$svc"
+done >"$TMP/stg/manifest.env"
+cd "$TMP/stg"
+
+: >"$DOCKER_STUB_LOG"
+./deploy.sh migrate >/tmp/deploy-stg.out 2>&1
+grep -q '生成元: .env.staging.example' /tmp/deploy-stg.out ||
+  { echo "stg dir must seed .env from .env.staging.example" >&2; cat /tmp/deploy-stg.out >&2; exit 1; }
+grep -q '^WEB_PORT=8061$' .env || { echo "stg .env must use staging WEB_PORT (8061)" >&2; exit 1; }
+grep -q '^IMAGE_TAG=stg$' .env || { echo "stg .env must use staging IMAGE_TAG (stg)" >&2; exit 1; }
+grep -q '^COMPOSE_PROJECT_NAME=idp-stg$' .env || { echo "stg .env must use idp-stg project name" >&2; exit 1; }
+# DATABASE_URL はテンプレートの :3307 を保持しつつ CHANGE-ME を実パスワードへ置換する。
+grep -qE '^DATABASE_URL=mysql://idp:[0-9a-f]+@127\.0\.0\.1:3307/idp$' .env ||
+  { echo "stg DATABASE_URL must keep :3307 and fill the password" >&2; cat .env >&2; exit 1; }
+if grep -qE '^[A-Za-z_][A-Za-z0-9_]*=.*CHANGE-ME' .env; then
+  echo "generated stg .env must not keep CHANGE-ME secrets" >&2
+  exit 1
+fi
+grep -q -- '--project-name idp-stg -f docker-compose.yml' "$DOCKER_STUB_LOG"
+
 echo "deploy script tests passed"

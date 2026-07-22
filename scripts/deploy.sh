@@ -145,6 +145,38 @@ default_compose_project_name() {
   esac
 }
 
+# 初回 .env 生成のテンプレートを、デプロイディレクトリ名から選ぶ。stg/prod 系のディレクトリでは
+# 専用テンプレート（WEB_PORT・IMAGE_TAG・COMPOSE_PROJECT_NAME を分離済み）を優先し、無ければ
+# 汎用 .env.example へ退避する。これにより「.env 未作成のまま実行して汎用既定で起動してしまう」事故を防ぐ。
+select_env_example() {
+  local dir
+  dir="$(basename "$base")"
+  case "$dir" in
+    stg | staging | *-stg | *-staging)
+      [[ -f "$base/.env.staging.example" ]] && {
+        printf '%s\n' "$base/.env.staging.example"
+        return
+      }
+      ;;
+    prod | production | *-prod | *-production)
+      [[ -f "$base/.env.production.example" ]] && {
+        printf '%s\n' "$base/.env.production.example"
+        return
+      }
+      ;;
+  esac
+  printf '%s\n' "$example_file"
+}
+
+# 指定キーの現在値に含まれる CHANGE-ME だけを置換値へ差し替える（host:port 等の他部分は保持）。
+# stg/prod テンプレートの DATABASE_URL がそれぞれ異なるポートを持つため、値ごと上書きしない。
+fill_change_me() {
+  local key="$1" replacement="$2" current
+  current="$(get_env_var "$key")"
+  [[ -n "$current" ]] || return 0
+  set_env_var "$key" "${current//CHANGE-ME/$replacement}"
+}
+
 init_compose_command() {
   local project_name
   project_name="$(get_env_var COMPOSE_PROJECT_NAME)"
@@ -210,10 +242,12 @@ ensure_env_file() {
     fi
     return 0
   fi
-  [[ -f "$example_file" ]] || die ".env.example が見つかりません。"
+  local seed_example
+  seed_example="$(select_env_example)"
+  [[ -f "$seed_example" ]] || die ".env の生成元テンプレートが見つかりません: $seed_example"
   command -v openssl >/dev/null 2>&1 || die "openssl が見つかりません。"
-  log ".env を新規生成します（秘密情報を乱数生成）。"
-  cp "$example_file" "$env_file"
+  log ".env を新規生成します（生成元: $(basename "$seed_example")、秘密情報を乱数生成）。"
+  cp "$seed_example" "$env_file"
   local db_password
   db_password="$(openssl rand -hex 24)"
   set_env_var MARIADB_PASSWORD "$db_password"
@@ -221,11 +255,12 @@ ensure_env_file() {
   set_env_var KEY_ENCRYPTION_KEY "$(openssl rand -base64 32)"
   set_env_var INTERNAL_SERVICE_TOKEN "$(openssl rand -hex 32)"
   set_env_var CSRF_SECRET "$(openssl rand -base64 32)"
-  set_env_var DATABASE_URL "mysql://idp:${db_password}@127.0.0.1:3306/idp"
-  set_env_var TEST_DATABASE_URL "mysql://idp:${db_password}@127.0.0.1:3306/idp"
+  # テンプレートの DATABASE_URL は host:port（stg/prod で異なる）を保持し、CHANGE-ME だけ実値へ置換する。
+  fill_change_me DATABASE_URL "$db_password"
+  fill_change_me TEST_DATABASE_URL "$db_password"
   set_env_var COMPOSE_PROJECT_NAME "$(default_compose_project_name)"
   chmod 600 "$env_file"
-  log ".env を生成しました（パーミッション 600）。"
+  log ".env を生成しました（パーミッション 600、Compose project: $(get_env_var COMPOSE_PROJECT_NAME)）。"
 }
 
 load_image_with_progress() {
