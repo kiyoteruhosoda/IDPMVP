@@ -42,6 +42,12 @@
 - `idp.system.admin` は root テナント自身のテナント管理を含むため、`idp.tenant.admin` を要求する
   エンドポイントでは**常に代替として許可**される（root の管理者は root テナント内の管理も行える）。
   逆に `idp.system.admin` を要求するエンドポイントでは代替フォールバックしない（system admin 固有）。
+- **`idp.system.admin` の付与・剥奪**: 権限付与・剥奪エンドポイント自体は `idp.tenant.admin` で保護されるが、
+  付与・剥奪する権限コードが `idp.system.admin` の場合に限り、Application 層
+  （`PermissionManagementService::ensure_system_admin_change_allowed`）が**実行者自身も `idp.system.admin` を
+  保有すること**を追加検証する。したがって root テナントでは既存の `idp.system.admin` 保有者が
+  `idp.system.admin` を付与・剥奪**できる**。単なる `idp.tenant.admin`（system.admin 非保有）では
+  `idp.system.admin` を付与・剥奪できず 403 となる。
 
 ```
 要求権限が idp.tenant.admin のとき許可される保有権限:
@@ -56,7 +62,10 @@
 ## エンドポイント別の要求権限
 
 `RequirePerms<P>` の型パラメータで指定する（`crates/api/src/presentation/admin.rs`）。
-`IdpAdmin` → `idp.tenant.admin`、`IdpSystemAdmin` → `idp.system.admin`。実際のパス・スキーマは Swagger UI を参照。
+`IdpAdmin` → `idp.tenant.admin`、`IdpSystemAdmin` → `idp.system.admin`。パスは
+`crates/api/src/presentation/router.rs` が出所。多くのエンドポイントは Swagger UI（`/api/docs`）で
+詳細を確認できるが、`whoami`・`GET /admin/permissions`（付与可能コード一覧）・SAML SP 管理は
+現状 `#[utoipa::path]` 未付与のため OpenAPI/Swagger には現れない（パスは本表・router.rs を参照）。
 
 ### `idp.system.admin` が必要（全体管理者のみ）
 
@@ -73,9 +82,10 @@
 | 機能 | 概要 |
 |---|---|
 | クライアント管理（`/{tenant_id}/admin/clients...`） | RP（OIDC クライアント）の登録・一覧・取得・更新・シークレット再発行 |
-| SAML SP 管理（`/{tenant_id}/admin/saml/service-providers...`） | SAML Service Provider の登録・管理 |
-| ユーザー管理（`/{tenant_id}/admin/users...`） | 当該テナントを所属元とするユーザーの管理（パスワードリセット・ステータス変更等） |
-| 権限の付与・剥奪（`/{tenant_id}/admin/permissions...`） | 当該テナント scope の権限付与・剥奪（`idp.system.admin` の付与は不可） |
+| SAML SP 管理（`/{tenant_id}/admin/saml-service-providers...`） | SAML Service Provider の登録・一覧・更新・削除・メタデータ取り込み |
+| ユーザー管理（`/{tenant_id}/admin/users...`） | 当該テナントを所属元とするユーザーの管理（作成・取得・状態変更・削除・パスワードリセット等） |
+| 付与可能な権限コード一覧（`GET /{tenant_id}/admin/permissions`） | `permissions` マスタの一覧（付与フォームの選択肢提示用） |
+| 権限の付与・剥奪・参照（`GET`/`POST /{tenant_id}/admin/users/{user_id}/permissions`、`DELETE …/{permission_code}`） | 当該テナント scope の権限を付与・剥奪・参照する（`idp.system.admin` の付与条件は上記「scope と判定ルール」を参照） |
 | メンバー管理（`/{tenant_id}/admin/members...`） | ゲストメンバーシップの解除等 |
 | 招待管理（`/{tenant_id}/admin/invitations...`） | 招待の作成 |
 | テナント設定（`/{tenant_id}/admin/settings/tenant`） | 自テナント（要求テナント自身）の表示名の取得・更新 |
