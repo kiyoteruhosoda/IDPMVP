@@ -51,6 +51,13 @@ pub async fn list(
             Vec::new()
         }
     };
+    // 作成元（親）テナント名を作成フォームに示すため取得する。取得失敗しても一覧は描画する（フェイルソフト）。
+    let current_tenant_name = state
+        .api
+        .get_current_tenant(&correlation.0, &tenant.0, &sso)
+        .await
+        .ok()
+        .map(|t| t.name);
     let messages = Messages::new(locale(&headers));
     Html(render(&TenantsConsole {
         messages: &messages,
@@ -59,6 +66,7 @@ pub async fn list(
         tenants: &tenants,
         csrf: &console_csrf_token(&sso, state.config.csrf_secret()),
         error_key: query.error.as_deref().and_then(error_key_for),
+        current_tenant_name: current_tenant_name.as_deref(),
     }))
     .into_response()
 }

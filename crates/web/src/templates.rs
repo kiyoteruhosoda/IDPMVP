@@ -161,6 +161,8 @@ pub struct ConsoleHome<'a> {
     /// `/{tenant_id}` プレフィクス（ADR-0009 §6）。
     pub tenant: &'a str,
     pub admin: Admin<'a>,
+    /// 現在のテナント表示名（root は既定 `ROOT`）。取得できなかった場合は `None`。
+    pub tenant_name: Option<&'a str>,
 }
 
 /// 管理コンソールのログイン画面（`GET /{tenant_id}/admin/login`）。共通レイアウトには載せない。
@@ -485,6 +487,8 @@ pub struct TenantsConsole<'a> {
     pub tenants: &'a [TenantView],
     pub csrf: &'a str,
     pub error_key: Option<&'a str>,
+    /// 現在（作成元＝親）テナントの表示名。作成フォームに「〇〇 の配下に作成」と示す。取得失敗時は `None`。
+    pub current_tenant_name: Option<&'a str>,
 }
 
 /// テナント作成結果（`POST /{tenant_id}/admin/tenants` 成功時）。
