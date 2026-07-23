@@ -25,17 +25,21 @@
 # 設定は環境変数、または下記 `build-remote-container.env` で行う。
 # **スクリプト冒頭の既定値を直接書き換えてはならない**（self-update が本ファイルを最新版で丸ごと
 # 差し替えるため、直接編集した値は次回実行時に失われる。設定は必ず env ファイル／環境変数で与える）:
-#   IDP_PROJECT        dev コンテナ内のプロジェクト名（設定ファイルの PROJECT でも指定可。{PROJECT} の展開元）
+#   IDP_PROJECT        プロジェクト名（省略時はデプロイ先ディレクトリの親から自動取得。下記）
 #   IDP_DEV_CONTAINER  ビルドを行う dev コンテナ名
 #   IDP_DEV_USER       コンテナ内でビルドする実行ユーザー
 #   IDP_DEV_WORKDIR    コンテナ内のリポジトリ working dir（scripts/build.sh がある場所）
 #   IDP_DIST_DIR       ホストから見えるビルド済み dist/ の絶対パス（必須。無指定はエラー）
 #   IDP_TARGET_DIR     デプロイ先ディレクトリ（既定: このスクリプトの場所）
 #
+# ディレクトリ構成の前提は **/<プロジェクト名>/<環境>**（例: /volume1/docker/idp/prod）。
+#   * 環境（stg/prod 等）  … デプロイ先ディレクトリ名から取得
+#   * プロジェクト名        … デプロイ先ディレクトリの親ディレクトリ名から取得
+# プロジェクト名の優先順位: IDP_PROJECT > 設定ファイル PROJECT > 親ディレクトリ名 > 既定値 idp。
+# この構成に従っていれば PROJECT の指定は不要。従わない場合は IDP_PROJECT／PROJECT で明示する。
+#
 # 設定は上記の環境変数のほか、**スクリプトと同じ場所の `build-remote-container.env`**（KEY=VALUE 形式）
-# にも書ける（`export` 等のコマンド実行は不要）。プロジェクト名は PROJECT に 1 度だけ書けばよく、
-# 各パスの `{PROJECT}` がその値へ展開される。例:
-#     PROJECT=idp
+# にも書ける（`export` 等のコマンド実行は不要）。各パスの `{PROJECT}` は確定した project 値へ展開される。例:
 #     IDP_DEV_CONTAINER=ubuntu-dev
 #     IDP_DEV_WORKDIR=/work/project/{PROJECT}
 #     IDP_DIST_DIR=/var/services/homes/kyon/.../work/project/{PROJECT}/dist
@@ -69,20 +73,33 @@ if [[ -f "$_config_file" ]]; then
   done <"$_config_file"
 fi
 
-# ---- 既定値（設定ファイル build-remote-container.env／環境変数で上書きする） ---------
-# ここの既定値は直接書き換えないこと（self-update が本ファイルを差し替えるため編集は失われる。
-# 環境固有の設定は build-remote-container.env か環境変数で与える）。
-# プロジェクト名は 1 度だけ定義する。環境変数 IDP_PROJECT > 設定ファイル PROJECT > 既定値 idp。
-project="${IDP_PROJECT:-${PROJECT:-idp}}"
-dev_container="${IDP_DEV_CONTAINER:-ubuntu-dev}"
-dev_user="${IDP_DEV_USER:-sshuser}"
-dev_workdir="${IDP_DEV_WORKDIR:-/work/project/$project}"
-dist_dir="${IDP_DIST_DIR:-}"
+# ---- ターゲットディレクトリ・自分自身のパスを先に確定する ---------------------------
+# 想定ディレクトリ構成は /<プロジェクト名>/<環境>（例: /volume1/docker/idp/prod）。
+# 環境はターゲットディレクトリ名、プロジェクト名はその親ディレクトリ名から取得する（下記）。
 target_dir="${IDP_TARGET_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 # self-update で自分自身を差し替えるため、絶対パスをここ（cd の前）で 1 度だけ確定する。
 # cd "$target_dir" 後に相対 BASH_SOURCE[0] を再解決すると別ディレクトリを指してしまう
 # （例: ./stg/build-remote-container.sh 起動で target_dir へ cd 済みだと ./stg が二重展開される）。
 self_path="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+
+# ---- 既定値（設定ファイル build-remote-container.env／環境変数で上書きする） ---------
+# ここの既定値は直接書き換えないこと（self-update が本ファイルを差し替えるため編集は失われる。
+# 環境固有の設定は build-remote-container.env か環境変数で与える）。
+# プロジェクト名は 1 度だけ確定する。優先順位: 環境変数 IDP_PROJECT > 設定ファイル PROJECT >
+# ターゲットディレクトリの親ディレクトリ名（/<プロジェクト名>/<環境> 前提）> 既定値 idp。
+_project_from_dir="$(basename "$(dirname "$target_dir")")"
+case "$_project_from_dir" in '' | '/' | '.' | '..') _project_from_dir='' ;; esac
+project="${IDP_PROJECT:-${PROJECT:-${_project_from_dir:-idp}}}"
+# プロジェクト名の出所（起動ログで「なぜこの値か」を分かるように表示する）。
+if   [[ -n "${IDP_PROJECT:-}" ]]; then project_source="環境変数 IDP_PROJECT"
+elif [[ -n "${PROJECT:-}"     ]]; then project_source="設定ファイル PROJECT"
+elif [[ -n "$_project_from_dir" ]]; then project_source="ディレクトリ（$target_dir の親）"
+else                                    project_source="既定値"
+fi
+dev_container="${IDP_DEV_CONTAINER:-ubuntu-dev}"
+dev_user="${IDP_DEV_USER:-sshuser}"
+dev_workdir="${IDP_DEV_WORKDIR:-/work/project/$project}"
+dist_dir="${IDP_DIST_DIR:-}"
 
 # パス中の {PROJECT} を project の値へ展開する（プロジェクト名の一元管理）。
 # 置換文字列側では bash 5.2 の patsub_replacement により `&`（マッチ全体）・`\` が
@@ -134,7 +151,7 @@ else
   log "  設定ファイル: なし（$_config_file 不在。環境変数と既定値のみ）"
 fi
 log "  解決した設定:"
-log "    PROJECT           = $project"
+log "    PROJECT           = $project （出所: $project_source）"
 log "    IDP_DEV_CONTAINER = $dev_container"
 log "    IDP_DEV_USER      = $dev_user"
 log "    IDP_DEV_WORKDIR   = $dev_workdir"

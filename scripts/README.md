@@ -93,6 +93,11 @@ dist/
 「`latest` でビルド → `.env` は `stg` を要求 → イメージ不一致」は起きない。上記に当てはまらない名前の
 ディレクトリは汎用 `.env.example`（`WEB_PORT=8060`・`IMAGE_TAG=latest`）にフォールバックする。
 
+**プロジェクト名はデプロイ先ディレクトリの親から自動取得する（`/<プロジェクト名>/<環境>` 前提）。**
+上図の `/opt/idp/prod` なら親ディレクトリ名 `idp` がプロジェクト名になる（`{PROJECT}` の展開元）。
+この構成に従っていれば `build-remote-container.env` に `PROJECT` を書く必要はない。従わない場合だけ
+`IDP_PROJECT`／`PROJECT` で明示する（優先順位: `IDP_PROJECT` > `PROJECT` > 親ディレクトリ名 > 既定 `idp`）。
+
 ```
 /opt/idp/
 ├── stg/    …ディレクトリ名 stg → .env.staging.example から生成（COMPOSE_PROJECT_NAME=idp-stg, WEB_PORT=8061, IMAGE_TAG=stg）
