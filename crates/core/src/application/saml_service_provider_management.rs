@@ -128,7 +128,8 @@ impl SamlServiceProviderManagementService {
             )
             .map_err(|e| SamlServiceProviderManagementError::Validation(e.to_string()))?;
 
-        self.providers
+        let updated = self
+            .providers
             .update(&provider)
             .await
             .map_err(|e| match e {
@@ -140,6 +141,10 @@ impl SamlServiceProviderManagementService {
                 }
                 other => SamlServiceProviderManagementError::Internal(other.to_string()),
             })?;
+        // find_by_id 成功後に別管理者が削除した競合（0 行更新）は not-found として扱う。
+        if !updated {
+            return Err(SamlServiceProviderManagementError::NotFound);
+        }
         Ok(provider)
     }
 

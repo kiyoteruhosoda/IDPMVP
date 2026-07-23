@@ -110,7 +110,7 @@ impl SamlServiceProviderRepository for SqlxSamlServiceProviderRepository {
         row.as_ref().map(map_row).transpose()
     }
 
-    async fn update(&self, provider: &SamlServiceProvider) -> Result<()> {
+    async fn update(&self, provider: &SamlServiceProvider) -> Result<bool> {
         let result = sqlx::query(
             "UPDATE saml_service_providers \
              SET display_name = ?, entity_id = ?, acs_url = ?, name_id_format = ?, \
@@ -130,7 +130,9 @@ impl SamlServiceProviderRepository for SqlxSamlServiceProviderRepository {
         .await;
 
         match result {
-            Ok(_) => Ok(()),
+            // find_by_id 後・UPDATE 前に別管理者が削除した競合では 0 行更新になる。
+            // それを成功扱いにすると未永続の内容で 200 を返してしまうため、行数で not-found を判定する。
+            Ok(r) => Ok(r.rows_affected() > 0),
             Err(sqlx::Error::Database(db)) if db.is_unique_violation() => {
                 Err(DomainError::Conflict(
                     "SAML service provider entity_id already exists in this tenant".to_string(),
