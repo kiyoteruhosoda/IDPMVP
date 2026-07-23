@@ -39,40 +39,91 @@ async fn setup() -> Option<TestEnv> {
     support_setup("tenant isolation").await
 }
 
-/// API 経由で作成したテナントとその初期管理者。
+/// API 経由で作成したテナントと、その正式な HOME 管理者。
 struct CreatedTenant {
     id: String,
     admin_id: String,
     admin_cookie: String,
 }
 
-/// root の system 管理者としてテナントを作成し、初期管理者の SSO セッションまで用意する。
+/// テナント作成のブートストラップフローを実行し、正式な HOME 管理者を用意する（ADR-0009 §4）。手順:
+///   1. root がテナントを作成 → root が新テナントの ACTIVE GUEST 管理者になる。
+///   2. root（ブートストラップ管理者）が正式な HOME 管理者を作成する。
+///   3. その HOME 管理者へ `idp.tenant.admin` を付与する。
+///
+/// 返す `admin_id`/`admin_cookie` はこの HOME 管理者のもの。作成者（root）はこの時点でも当該テナントの
+/// ゲスト管理者のまま残る（各テストは HOME 管理者の Cookie で内部を操作する。root の離脱は
+/// [`root_leaves_tenant`] を明示的に呼ぶテストでのみ行い、共有 root 行に対する DELETE 競合を避ける）。
 async fn create_tenant(env: &TestEnv, root_cookie: &str, name: &str) -> CreatedTenant {
+    // 1. root がテナントを作成（root が ACTIVE GUEST + idp.tenant.admin を得る）。
     let res = send(
         &env.app,
         post(
             root_cookie,
             &format!("/{}/admin/tenants", env.root_tenant_id),
-            json!({
-                "name": name,
-                "admin_email": format!("owner-{}@{}.example.com", unique(), name.to_lowercase()),
-            }),
+            json!({ "name": name }),
         ),
     )
     .await;
     assert_eq!(res.status(), StatusCode::CREATED, "create tenant {name}");
-    let created = body_json(res).await;
-    let id = created["id"].as_str().expect("tenant id").to_string();
-    let admin_id = created["admin_user_id"]
+    let id = body_json(res).await["id"]
+        .as_str()
+        .expect("tenant id")
+        .to_string();
+
+    // 2. root（ブートストラップ管理者）が正式な HOME 管理者を作成する。
+    let admin_email = format!("owner-{}@{}.example.com", unique(), name.to_lowercase());
+    let res = send(
+        &env.app,
+        post(
+            root_cookie,
+            &format!("/{id}/admin/users"),
+            json!({ "email": admin_email }),
+        ),
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::CREATED, "create home admin");
+    let admin_id = body_json(res).await["user_id"]
         .as_str()
         .expect("admin id")
         .to_string();
+
+    // 3. HOME 管理者へ idp.tenant.admin を付与する。
+    let res = send(
+        &env.app,
+        post(
+            root_cookie,
+            &format!("/{id}/admin/users/{admin_id}/permissions"),
+            json!({ "permission_code": "idp.tenant.admin" }),
+        ),
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::OK, "grant idp.tenant.admin");
+
     let admin_cookie = create_sso_session(&env.pool, &admin_id).await;
     CreatedTenant {
         id,
         admin_id,
         admin_cookie,
     }
+}
+
+/// 作成者（root）が自身のゲストメンバーシップを解除して当該テナントから離脱する（解除時に当該テナント
+/// scope の権限行も後始末される。ADR-0009 §3・§4）。離脱後は root は当該テナント内部を操作できない。
+async fn root_leaves_tenant(env: &TestEnv, root_cookie: &str, tenant_id: &str) {
+    let res = send(
+        &env.app,
+        delete(
+            root_cookie,
+            &format!("/{tenant_id}/admin/members/{}", env.root_admin_id),
+        ),
+    )
+    .await;
+    assert_eq!(
+        res.status(),
+        StatusCode::NO_CONTENT,
+        "root leaves the tenant"
+    );
 }
 
 /// テナント管理者として利用者を作成し `(user_id, email)` を返す。
@@ -100,15 +151,18 @@ async fn insert_public_client(pool: &sqlx::MySqlPool, tenant_id: &str) -> String
     support::insert_public_client(pool, tenant_id, &["openid"]).await
 }
 
-/// 保証 1: root（idp.system.admin）はテナントを作成できるが、作成したテナントの内部
-/// （管理 API 全般）には一律 403 で触れない。内部は当該テナント scope の idp.tenant.admin のみ。
+/// 保証 1: root（idp.system.admin）はテナントを作成でき、ブートストラップ中は内部を操作できるが、
+/// 自身のゲストメンバーシップを解除して離脱したあとは、作成したテナントの内部（管理 API 全般）に
+/// 一律 403 で触れない。内部を操作できるのは当該テナント scope の idp.tenant.admin のみ。
 #[tokio::test]
 async fn root_can_create_but_cannot_operate_inside_created_tenant() {
     let Some(env) = setup().await else { return };
     let root_cookie = create_sso_session(&env.pool, &env.root_admin_id).await;
     let tenant = create_tenant(&env, &root_cookie, "Inner").await;
+    // ブートストラップ完了後、作成者（root）は自身のゲストメンバーシップを解除して離脱する。
+    root_leaves_tenant(&env, &root_cookie, &tenant.id).await;
 
-    // root の system 管理者は、作成した子テナントの管理 API へ一切アクセスできない（§4・§9）。
+    // 離脱後の root の system 管理者は、作成した子テナントの管理 API へ一切アクセスできない（§4・§9）。
     let forbidden_requests = vec![
         get(&root_cookie, &format!("/{}/admin/whoami", tenant.id)),
         get(&root_cookie, &format!("/{}/admin/members", tenant.id)),
@@ -147,7 +201,7 @@ async fn root_can_create_but_cannot_operate_inside_created_tenant() {
         post(
             &root_cookie,
             &format!("/{}/admin/tenants", tenant.id),
-            json!({ "name": "Grand", "admin_email": "g@example.com" }),
+            json!({ "name": "Grand" }),
         ),
     ];
     for req in forbidden_requests {
@@ -226,7 +280,7 @@ async fn tenant_admin_boundary_is_exact_match_and_data_is_isolated() {
         post(
             &a.admin_cookie,
             &format!("/{}/admin/tenants", env.root_tenant_id),
-            json!({ "name": "Rogue", "admin_email": "r@example.com" }),
+            json!({ "name": "Rogue" }),
         ),
         delete(
             &a.admin_cookie,
