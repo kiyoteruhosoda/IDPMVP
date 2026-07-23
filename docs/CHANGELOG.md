@@ -8,9 +8,12 @@
   core コマンド・e2e・統合テストを更新。ポータル初回強制変更の共有画面（`ForcedPasswordChange`）と
   MFA/メール検証ゲートはそのまま維持し、識別子フィールドのみ `username` に揃えた。
 - **`preferred_username` 未指定時は `email` を既定値化**: 自己登録（`register`）・管理者作成
-  （`user_management`）で `preferred_username` が未指定なら `email` と同値を採用する。既存ユーザー向けに
-  `preferred_username IS NULL` を `email` で埋める backfill マイグレーション（`0011_backfill_preferred_username`）を
-  追加（`(tenant_id, preferred_username)` UNIQUE は email がテナント内一意のため衝突しない）。
+  （`user_management`）で `preferred_username` が未指定なら `email` と同値を採用する。採用値は
+  `domain::values::validate_preferred_username` でカラム長（`VARCHAR(255)`）超過を永続化前に検証する
+  （`email` は `VARCHAR(320)` のため既定値化で超え得る）。既存ユーザー向けに `preferred_username IS NULL`
+  を `email` で埋める backfill マイグレーション（`0011_backfill_preferred_username`）を追加。email が別
+  ユーザーの `preferred_username` と衝突する行はスキップして UNIQUE 違反によるマイグレーション中断を防ぐ
+  （LEFT JOIN + IS NULL。衝突行は NULL のまま残し運用で個別解消）。
 
 ## 2026-07-23（ログイン識別子をメールアドレスに統一 + ポータル初回ログインの強制変更誘導を統合）
 
