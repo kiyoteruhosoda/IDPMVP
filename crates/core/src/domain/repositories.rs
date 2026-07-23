@@ -182,7 +182,8 @@ pub trait SamlServiceProviderRepository: Send + Sync {
         id: Uuid,
     ) -> Result<Option<SamlServiceProvider>>;
     /// 既存 SP を更新する（同一テナント・id のレコードのみ。entity_id 重複は `Conflict`）。
-    async fn update(&self, provider: &SamlServiceProvider) -> Result<()>;
+    /// 更新できた場合 `true`、対象が無ければ（find 後に別管理者が削除した競合等）`false`。
+    async fn update(&self, provider: &SamlServiceProvider) -> Result<bool>;
     /// テナント境界内で SP を削除する。削除できた場合 `true`、対象が無ければ `false`。
     async fn delete(&self, tenant_id: TenantId, id: Uuid) -> Result<bool>;
 }
