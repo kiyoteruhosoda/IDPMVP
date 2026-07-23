@@ -99,7 +99,9 @@ impl UserManagementService {
     ) -> Result<PreparedUser, UserManagementError> {
         let email = cmd.email.trim().to_string();
         validate_email(&email)?;
-        let preferred_username = normalize_optional(cmd.preferred_username);
+        // ログイン識別子は preferred_username。未指定なら email を既定値として採用する（ADR-0009 §8）。
+        let preferred_username =
+            normalize_optional(cmd.preferred_username).unwrap_or_else(|| email.clone());
         let name = normalize_optional(cmd.name);
         let tenant_id = tenant.tenant_id();
 
@@ -116,18 +118,16 @@ impl UserManagementService {
                 "email already registered".to_string(),
             ));
         }
-        if let Some(username) = &preferred_username {
-            if self
-                .users
-                .find_by_username(tenant_id, username)
-                .await
-                .map_err(internal)?
-                .is_some()
-            {
-                return Err(UserManagementError::Conflict(
-                    "preferred_username already taken".to_string(),
-                ));
-            }
+        if self
+            .users
+            .find_by_username(tenant_id, &preferred_username)
+            .await
+            .map_err(internal)?
+            .is_some()
+        {
+            return Err(UserManagementError::Conflict(
+                "preferred_username already taken".to_string(),
+            ));
         }
 
         let generated_password = crypto::random_token(GENERATED_PASSWORD_BYTES);
@@ -142,7 +142,7 @@ impl UserManagementService {
             // これにより自己登録（未検証）のみがログイン時のメール検証ゲートに掛かる。テナント作成時の
             // 初期管理者（本サービス経由）もログイン可能なまま。
             email_verified: true,
-            preferred_username,
+            preferred_username: Some(preferred_username),
             name,
             language: None,
             password_hash,
