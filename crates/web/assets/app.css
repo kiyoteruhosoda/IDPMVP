@@ -56,12 +56,29 @@ code {
   white-space: nowrap;
 }
 
-/* 表のセル内の識別子（テナント ID 等の <code>）は、既定の `code { word-break: break-all }` だと
- * 狭い画面で 1 文字ずつ縦積みになり、ID 列が極端に細くなって一覧全体が崩れる。表内では折り返さず、
- * はみ出す分は .table-responsive の横スクロールに任せる（上の見出し・ボタンと同じ方針）。 */
-.table-responsive td code {
-  white-space: nowrap;
-  word-break: normal;
+/* 表のセル内の識別子（テナント ID・client_id・correlation_id 等の <code>）の折り返し方針。
+ * 既定の `code { word-break: break-all }` のままだと、狭い画面で列が極端に細くなり
+ * 1 文字ずつ縦積みになって読めない。画面幅で方針を切り替える。 */
+
+/* タブレット以上（>=576px）: 折り返さず、はみ出す分は .table-responsive の横スクロールへ逃がす
+ * （見出し・ボタンと同じ方針）。列幅に余裕があるので 1 行で表示できる。 */
+@media (min-width: 576px) {
+  .table-responsive td code {
+    white-space: nowrap;
+    word-break: normal;
+  }
+}
+
+/* スマホ（<576px）: 6 列テーブルでは横スクロールに逃がすと、36 文字の UUID を読むだけで
+ * 毎回横スクロールが必要になり読みづらい。狭い画面では ID の幅を抑えて数行に折り返し、
+ * その場で読める形にする。inline-block + max-width で列が 1 文字幅に潰れて縦積みになるのを防ぐ。 */
+@media (max-width: 575.98px) {
+  .table-responsive td code {
+    display: inline-block;
+    max-width: 20ch;
+    white-space: normal;
+    word-break: break-all;
+  }
 }
 
 /* パスワード表示切替ボタン（password_visibility.html の .password-toggle）の枠線を、
