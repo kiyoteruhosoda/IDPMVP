@@ -71,10 +71,16 @@ code {
 
 /* スマホ（<576px）: 6 列テーブルでは横スクロールに逃がすと、36 文字の UUID を読むだけで
  * 毎回横スクロールが必要になり読みづらい。狭い画面では ID の幅を抑えて数行に折り返し、
- * その場で読める形にする。inline-block + max-width で列が 1 文字幅に潰れて縦積みになるのを防ぐ。 */
+ * その場で読める形にする。
+ *
+ * `word-break: break-all` は要素の min-content 幅を約 1 文字まで縮められるため、他列の
+ * nowrap な見出し・ボタンでテーブルが min-content レイアウトへ寄せられると、max-width だけでは
+ * ID 列が「ID」見出し幅まで潰れ、UUID が 1〜2 文字ずつ縦積みになりうる。これを防ぐため
+ * min-width で下限を、max-width で上限を与え、常に読める幅（数行）に収める。 */
 @media (max-width: 575.98px) {
   .table-responsive td code {
     display: inline-block;
+    min-width: 16ch;
     max-width: 20ch;
     white-space: normal;
     word-break: break-all;
