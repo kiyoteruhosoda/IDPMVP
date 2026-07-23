@@ -73,10 +73,17 @@ if [[ -f "$_config_file" ]]; then
   done <"$_config_file"
 fi
 
+log() { printf '[idp:container] %s\n' "$*" >&2; }
+die() { printf '[idp:container][error] %s\n' "$*" >&2; exit 1; }
+
 # ---- ターゲットディレクトリ・自分自身のパスを先に確定する ---------------------------
 # 想定ディレクトリ構成は /<プロジェクト名>/<環境>（例: /volume1/docker/idp/prod）。
 # 環境はターゲットディレクトリ名、プロジェクト名はその親ディレクトリ名から取得する（下記）。
 target_dir="${IDP_TARGET_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+# 相対・非正規化パス（例 IDP_TARGET_DIR=stg や 末尾 /.）でも親ディレクトリを正しく導出できるよう、
+# 絶対・正規化済みパスへ解決してから親を取る（cd が . / .. を畳む）。存在しなければ明示エラー。
+target_dir="$(cd "$target_dir" 2>/dev/null && pwd)" \
+  || die "IDP_TARGET_DIR のディレクトリが存在しません: ${IDP_TARGET_DIR:-（スクリプトの場所）}"
 # self-update で自分自身を差し替えるため、絶対パスをここ（cd の前）で 1 度だけ確定する。
 # cd "$target_dir" 後に相対 BASH_SOURCE[0] を再解決すると別ディレクトリを指してしまう
 # （例: ./stg/build-remote-container.sh 起動で target_dir へ cd 済みだと ./stg が二重展開される）。
@@ -108,9 +115,6 @@ _project_repl="${project//\\/\\\\}"
 _project_repl="${_project_repl//&/\\&}"
 dev_workdir="${dev_workdir//\{PROJECT\}/$_project_repl}"
 dist_dir="${dist_dir//\{PROJECT\}/$_project_repl}"
-
-log() { printf '[idp:container] %s\n' "$*" >&2; }
-die() { printf '[idp:container][error] %s\n' "$*" >&2; exit 1; }
 
 # モードは引数のどこにあっても拾う（余分な語が前に付いても動く）。既定 migrate。
 mode=migrate
