@@ -164,6 +164,14 @@ grep -q 'version 2' /tmp/deploy-checksum-fail.out ||
   { echo "checksum mismatch guidance must name the affected migration version" >&2; exit 1; }
 grep -q './deploy.sh reset' /tmp/deploy-checksum-fail.out ||
   { echo "checksum mismatch guidance must offer the reset remedy" >&2; exit 1; }
+# 結論（初期化が必要）を明示すること。
+grep -q '初期化' /tmp/deploy-checksum-fail.out ||
+  { echo "checksum mismatch guidance must state that DB re-initialization is required" >&2; exit 1; }
+# 対処案内を MariaDB のコンテナログ（無関係なノイズ）で埋もれさせないこと。
+if grep -q '\[idp\]\[diagnostic\] logs tail: mariadb' /tmp/deploy-checksum-fail.out; then
+  echo "checksum mismatch must not bury guidance under mariadb container logs" >&2
+  exit 1
+fi
 # 決定論的な失敗はリトライしない（migrate は 1 回だけ実行される）。
 if [[ "$(grep -c 'run --rm -T migrate' "$DOCKER_STUB_LOG")" -ne 1 ]]; then
   echo "checksum mismatch must not be retried (migrate should run exactly once)" >&2
