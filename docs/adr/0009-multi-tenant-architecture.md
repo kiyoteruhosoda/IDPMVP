@@ -72,10 +72,13 @@ CREATE TABLE tenants (
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
 ```
 
-**root テナント**: `parent_tenant_id = NULL`。root も含め **UUID は固定値を使わず、seed（DDL 投入時）に
-動的採番する**（UUIDv7）。root は「`parent_tenant_id IS NULL` の唯一の行」として**構造的に識別**し、
-特定の UUID リテラルには依存しない。`is_root` 番兵列 + `tenants_single_root_uk` により、root が
-**DB レベルで高々 1 行**であることを担保する。
+**root テナント**: `parent_tenant_id = NULL`。root は「`parent_tenant_id IS NULL` の唯一の行」として
+**構造的に識別**する。`is_root` 番兵列 + `tenants_single_root_uk` により、root が **DB レベルで高々 1 行**
+であることを担保する。
+
+> **ADR-0011 による改訂**: root の UUID は当初 seed で動的採番していたが、DB 再初期化のたびに変わり管理者
+> ログイン URL が変わる問題があったため、**固定値 `00000000-0000-7000-8000-000000000001`** に改めた
+> （§1 の「動的採番」はこの点のみ ADR-0011 が上書きする。構造的識別・単一 root 保証は不変）。
 
 - root の UUID はホスト側で予測できないため、初期 system 管理者のログイン URL（`/{root_uuid}/authorize`）は
   ブートストラップ時に確定する。seed 実行時に root UUID を標準出力へ記録し、取得手順

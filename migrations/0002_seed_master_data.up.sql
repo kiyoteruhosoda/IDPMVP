@@ -1,32 +1,27 @@
 -- マスタデータ seed（ADR-0009 §1・§4・§5、Phase 1）。
---   1. root テナント（UUIDv7 を投入時に動的採番。固定リテラルは使わない）
+--   1. root テナント（固定 UUID。全環境共通で git 管理する。ADR-0011）
 --   2. user_permissions への CHECK 制約付与: idp.system.admin の scope = root
---      （root UUID は投入時に確定しているため、解決値をリテラル化して PREPARE/EXECUTE で付与する）
+--      （root UUID は固定値のため、リテラル化して PREPARE/EXECUTE で付与する）
 --   3. 権限コードのマスタ（idp.system.admin / idp.tenant.admin。許可値の単一出所）
 --   4. 初期管理者 admin@example.com（root 所属・HOME メンバーシップ・idp.system.admin を DB 直接投与）
 --
 -- 冪等性: すべて「存在しなければ挿入」で書く。再適用しても既存行（変更済みパスワード等）を初期値へ
--- 戻さず、UUID を再採番しない。root は `parent_tenant_id IS NULL` の唯一の行として構造的に識別する
+-- 戻さない。root は `parent_tenant_id IS NULL` の唯一の行として構造的に識別する
 -- （is_root 番兵列 + UNIQUE により DB レベルで高々 1 行）。
 --
--- root UUID は環境ごとに異なる。確認手順（ログイン URL の確定に必要）:
---   SELECT id FROM tenants WHERE parent_tenant_id IS NULL;
--- 詳細は docs/OPERATIONS.md「root テナントの UUID を確認したいとき」。
+-- root UUID は下記の固定値。管理者ログイン URL は `/00000000-0000-7000-8000-000000000001/...`。
+-- 動的採番だと DB 再初期化のたびに変わってしまうため固定した（ADR-0011）。
 
 -- ---------------------------------------------------------------------------
--- UUIDv7 の組み立て（MariaDB 10.11 には UUID_v7() が無いため手組みする）:
+-- 初期管理者の UUIDv7 組み立て（MariaDB 10.11 には UUID_v7() が無いため手組みする）:
 --   unix time (ms) 48bit ＋ version 7 (4bit) ＋ rand 12bit ＋ variant 10 (2bit) ＋ rand 62bit。
 --   乱数は SHA2(UUID(), RAND(), ...) から取る（識別子であり秘密値ではない）。
 -- ---------------------------------------------------------------------------
 
--- 1) root テナント（存在しなければ動的採番して挿入）
-SET @ts_hex := LPAD(HEX(CAST(FLOOR(UNIX_TIMESTAMP(NOW(3)) * 1000) AS UNSIGNED)), 12, '0');
-SET @rand_hex := LOWER(SHA2(CONCAT(UUID(), RAND(), RAND(), 'tenant-root'), 256));
-SET @root_candidate := LOWER(CONCAT(
-    SUBSTR(@ts_hex, 1, 8), '-', SUBSTR(@ts_hex, 9, 4),
-    '-7', SUBSTR(@rand_hex, 1, 3),
-    '-', HEX(8 | (CONV(SUBSTR(@rand_hex, 4, 1), 16, 10) & 3)), SUBSTR(@rand_hex, 5, 3),
-    '-', SUBSTR(@rand_hex, 8, 12)));
+-- 1) root テナント（固定 UUID。存在しなければ挿入）。
+--    root の UUID は URL `/{root}/...` に現れる識別子で秘密値ではない（アクセス制御は scope +
+--    メンバーシップ + 認証で担保する）。UUIDv7 形（version=7・variant=8）の well-known な値を用いる。
+SET @root_candidate := '00000000-0000-7000-8000-000000000001';
 
 INSERT INTO tenants (id, parent_tenant_id, name, status)
 SELECT @root_candidate, NULL, 'Root', 'ACTIVE'
