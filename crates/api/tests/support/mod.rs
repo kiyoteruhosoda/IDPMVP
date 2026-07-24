@@ -60,7 +60,7 @@ pub struct TestEnv {
     pub pool: MySqlPool,
     /// 基底 issuer（`config.issuer()`）。per-tenant issuer は `<issuer>/<tenant_id>`。
     pub issuer: String,
-    /// seed 済み root テナントの UUID（動的採番のため DB から引く）。
+    /// seed 済み root テナントの UUID（固定値だが構造 `parent_tenant_id IS NULL` で DB から引く）。
     pub root_tenant_id: String,
     /// seed の初期管理者（root 所属・idp.system.admin 保有）の内部 ID。
     pub root_admin_id: String,

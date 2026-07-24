@@ -27,9 +27,10 @@ sqlx マイグレーション（MariaDB）を管理する。
   （`(tenant_id, client_id)` 複合外部キー）・`sso_sessions`（ホスト共有のため tenant なし）・
   `signing_keys`・`revoked_access_tokens`・`user_totp_secrets`・`user_webauthn_credentials`・
   `passkey_challenges`・`audit_log`（`tenant_id` 追跡列）。
-- `0002_seed_master_data`: マスタデータ seed（冪等）。root テナント（UUIDv7 を**投入時に動的採番**。
-  固定リテラルなし）、`idp.system.admin` の scope = root を縛る CHECK 制約（解決済み root UUID を
-  リテラル化して `PREPARE`/`EXECUTE` で付与。ファイル自体は静的でチェックサムは全環境一致）、
+- `0002_seed_master_data`: マスタデータ seed（冪等）。root テナント（**固定 UUID**
+  `00000000-0000-7000-8000-000000000001`。全環境共通で git 管理する。ADR-0011）、
+  `idp.system.admin` の scope = root を縛る CHECK 制約（固定 root UUID を
+  リテラル化して `PREPARE`/`EXECUTE` で付与）、
   権限コード（`idp.system.admin` / `idp.tenant.admin`）、初期管理者 `admin@example.com`
   （root 所属・HOME メンバーシップ・`must_change_password = 1`・`idp.system.admin` を DB 直接付与）。
 - `0009_default_admin_password`: 初期管理者 `admin@example.com` の既定パスワードを、メールアドレスと
@@ -44,5 +45,5 @@ sqlx マイグレーション（MariaDB）を管理する。
   （ADR-0009 §8）ため、初期案内どおり `admin@example.com` でログインできるようにする。追記型のため
   0002 は書き換えず、本マイグレーションで更新する。
 
-root テナントの UUID は環境ごとに異なる。確認手順は `docs/OPERATIONS.md`
-「root テナントの UUID を確認したいとき」を参照。
+root テナントの UUID は固定値 `00000000-0000-7000-8000-000000000001`（全環境共通・git 管理。ADR-0011）。
+管理者ログイン URL は `/00000000-0000-7000-8000-000000000001/...`。

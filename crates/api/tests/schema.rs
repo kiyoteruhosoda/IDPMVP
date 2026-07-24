@@ -86,13 +86,17 @@ async fn migrations_apply_and_multi_tenant_guarantees_hold() {
         assert_eq!(n, 1, "table `{table}` must exist after migration");
     }
 
-    // --- seed: root テナント（動的採番の UUIDv7。ADR-0009 §1） --------------------
+    // --- seed: root テナント（固定 UUID。ADR-0011） --------------------
     let root: String = sqlx::query("SELECT id FROM tenants WHERE parent_tenant_id IS NULL")
         .fetch_one(&pool)
         .await
         .expect("root tenant must be seeded")
         .get(0);
     assert_uuid_v7(&root, "root tenant id");
+    assert_eq!(
+        root, "00000000-0000-7000-8000-000000000001",
+        "root tenant must use the fixed UUID (ADR-0011)"
+    );
 
     // --- seed: 初期管理者（root 所属・HOME メンバーシップ・system.admin。ADR-0009 Phase 1-5）
     let admin_row = sqlx::query(

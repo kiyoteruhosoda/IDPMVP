@@ -28,11 +28,14 @@ DATABASE_URL='mysql://idp:idp@127.0.0.1:3306/idp' sqlx migrate run
 新規作成の規約は `migrations/README.md` と `.claude/skills/db-migration/` を参照。
 アプリは起動時に version を照合するだけで適用は行わない。
 
-## root テナントの UUID を確認したいとき
+## root テナントの UUID
 
-root テナントの UUID は seed が**動的採番**するため環境ごとに異なる（固定値はない。ADR-0009 §1）。
-システム管理者のログイン URL（`/{root_uuid}/...` 系）の確定に必要になる。
-`deploy.sh` はデプロイ完了時にログイン URL として標準出力へ記録するが、後から確認するには DB を参照する。
+root テナントの UUID は**固定値** `00000000-0000-7000-8000-000000000001`（全環境共通で git 管理。ADR-0011）。
+システム管理者のログイン URL は `/00000000-0000-7000-8000-000000000001/...`。DB 再初期化しても変わらない。
+
+> 以前は seed が動的採番していたため環境ごとに異なっていた。固定化の経緯は ADR-0011 を参照。
+
+念のため DB から確認する場合:
 
 ```sql
 SELECT id FROM tenants WHERE parent_tenant_id IS NULL;
@@ -62,7 +65,7 @@ mariadb -e 'DROP DATABASE idp; CREATE DATABASE idp CHARACTER SET utf8mb4;'
 DATABASE_URL='mysql://idp:idp@127.0.0.1:3306/idp' sqlx migrate run
 ```
 
-再作成後、root テナント UUID は再採番される（上記の手順で確認し、クライアント設定等を更新する）。
+再作成後も root テナント UUID は固定値 `00000000-0000-7000-8000-000000000001` のまま変わらない（ADR-0011）。
 
 ## テストを実行したいとき
 

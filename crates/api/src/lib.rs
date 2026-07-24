@@ -63,7 +63,7 @@ pub async fn run() -> anyhow::Result<()> {
     let clock: Arc<dyn domain::clock::Clock> = Arc::new(infrastructure::clock::SystemClock);
 
     // seed 済み root テナントの存在確認（fail-fast。マイグレーション/seed 漏れの検出）。
-    // root UUID は環境ごとに動的採番のため、DB から構造的に引いてログへ記録する（ADR-0009 §1）。
+    // root UUID は固定値だが、識別は `parent_tenant_id IS NULL` の構造で行いログへ記録する（ADR-0011）。
     {
         use domain::repositories::TenantRepository as _;
         let tenants = infrastructure::repositories::tenant::SqlxTenantRepository::new(pool.clone());
