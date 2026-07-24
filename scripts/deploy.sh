@@ -82,11 +82,16 @@ get_env_var() {
 }
 
 mask_secrets() {
-  local sed_expr=() key value
+  local sed_expr=() key value escaped
   if [[ -f "$env_file" ]]; then
     for key in MARIADB_PASSWORD MARIADB_ROOT_PASSWORD KEY_ENCRYPTION_KEY INTERNAL_SERVICE_TOKEN CSRF_SECRET; do
       value="$(get_env_var "$key" 2>/dev/null || true)"
-      [[ -n "$value" ]] && sed_expr+=(-e "s|${value//|/\\|}|***MASKED***|g")
+      [[ -n "$value" ]] || continue
+      # 秘密値を sed の BRE パターンとして使うため、メタ文字（\ . * [ ] ^ $ と区切りの |）を
+      # エスケープする。これを怠ると、記号を含むパスワード（例 MARIADB_PASSWORD=[…）で不正な
+      # 正規表現になり sed が失敗し、pipefail 下では migrate 成功時のマスク処理までデプロイを中断させる。
+      escaped="$(printf '%s' "$value" | sed 's/[][\.*^$|]/\\&/g')"
+      sed_expr+=(-e "s|${escaped}|***MASKED***|g")
     done
   fi
   if [[ ${#sed_expr[@]} -gt 0 ]]; then sed "${sed_expr[@]}"; else cat; fi

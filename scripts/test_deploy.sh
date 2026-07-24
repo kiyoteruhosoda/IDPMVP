@@ -175,6 +175,23 @@ if grep -q 'DB migration failed after 3 attempts' /tmp/deploy-checksum-fail.out;
   exit 1
 fi
 
+# 秘密値に sed のメタ文字（[ . * ^ $ | 等）が含まれても mask_secrets が壊れないこと。マスク処理は
+# migrate 成功時にも毎回走るため、ここが失敗すると成功デプロイまで pipefail で中断してしまう。
+orig_pw_line="$(grep '^MARIADB_PASSWORD=' .env)"
+: >"$DOCKER_STUB_LOG"
+sed -i 's|^MARIADB_PASSWORD=.*|MARIADB_PASSWORD=p[a.s*s^d$x|' .env
+set +e
+./scripts/deploy.sh app >/tmp/deploy-metachar-secret.out 2>&1
+status=$?
+set -e
+[[ $status -eq 0 ]] || { echo "metacharacter secret must not abort a successful deploy" >&2; cat /tmp/deploy-metachar-secret.out >&2; exit 1; }
+if grep -qF 'p[a.s*s^d$x' /tmp/deploy-metachar-secret.out; then
+  echo "metacharacter secret must be masked (not leaked) in deploy output" >&2
+  exit 1
+fi
+# .env を元のパスワードへ戻し、後続テストへ影響させない。
+sed -i "s|^MARIADB_PASSWORD=.*|${orig_pw_line}|" .env
+
 # アプリ用 DB ユーザーの認証が失敗する（既存 volume と .env のパスワード不一致）場合は、意味のない
 # migrate リトライではなくプリフライトで即座に停止し、原因と対処を提示する。
 : >"$DOCKER_STUB_LOG"
